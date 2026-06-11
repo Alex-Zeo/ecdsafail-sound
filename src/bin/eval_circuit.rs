@@ -196,6 +196,49 @@ fn fiat_shamir_seed(ops: &[Op]) -> sha3::Shake256Reader {
     hasher.finalize_xof()
 }
 
+// ─── SOUND seed (this fork's correction) ───────────────────────────────────
+//
+// The original fiat_shamir_seed() above hashes the OP STREAM, so a contestant can
+// re-roll WHICH inputs get tested for free by appending identity "tail nonce" gates:
+// a circuit that is wrong on a few reachable inputs is hidden by hunting a sample
+// that misses its errors. This fork seeds the test inputs from a GRADER-controlled
+// source, INDEPENDENT of the ops — fresh OS randomness per run (ungameable AND
+// un-hardcodable), or a fixed GRADER_SEED (hex) for reproducible scoring. Same
+// Shake256Reader, so run_tests is unchanged: only WHO chooses the inputs changes.
+
+fn sound_seed() -> sha3::Shake256Reader {
+    let mut seed = [0u8; 32];
+    let mode = match std::env::var("GRADER_SEED") {
+        Ok(hex) if !hex.is_empty() => {
+            let b = hex.as_bytes();
+            for i in 0..32.min(b.len() / 2) {
+                seed[i] = u8::from_str_radix(
+                    std::str::from_utf8(&b[2 * i..2 * i + 2]).unwrap_or("00"),
+                    16,
+                )
+                .unwrap_or(0);
+            }
+            "GRADER_SEED (fixed, reproducible)"
+        }
+        _ => {
+            use std::io::Read;
+            std::fs::File::open("/dev/urandom")
+                .and_then(|mut f| f.read_exact(&mut seed))
+                .expect("sound_seed: OS RNG (/dev/urandom) required");
+            "OS-random (fresh per run)"
+        }
+    };
+    println!("  seed source : {mode}  [{}]", hex32(&seed));
+    let mut hasher = Shake256::default();
+    hasher.update(b"ecdsafail-sound-v1-grader-controlled-seed");
+    hasher.update(&seed);
+    hasher.finalize_xof()
+}
+
+fn hex32(b: &[u8; 32]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
 // ─── Test runner ──────────────────────────────────────────────────────────
 
 struct SeedReport {
@@ -488,8 +531,8 @@ fn main() {
     println!("  qubits      : {}", total_qubits);
     println!("  bits        : {}", num_bits);
 
-    println!("\n-- correctness tests ({} shots) --", NUM_TESTS);
-    let xof = fiat_shamir_seed(&ops);
+    println!("\n-- correctness tests ({} shots, SOUND grader-seeded) --", NUM_TESTS);
+    let xof = sound_seed();
     let r = run_tests(&ops, &regs, total_qubits, num_bits, xof, NUM_TESTS);
     println!("  tested shots            : {}", r.n_shots);
     println!("  classical mismatches    : {}", r.classical_failures);
