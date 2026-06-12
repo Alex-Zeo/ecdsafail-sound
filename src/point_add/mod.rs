@@ -1741,6 +1741,17 @@ pub fn build() -> Vec<Op> {
             return Vec::new();
         }
     }
+    if std::env::var("CMP_ACC_PLUS_F_MEASURED_SELFTEST").is_ok() {
+        match cmp_acc_plus_f_ge_p_measured_selftest() {
+            Ok(()) => eprintln!(
+                "CMP_ACC_PLUS_F_MEASURED_SELFTEST: PASS (value-exact, acc/f restored, phase 0 over all seeds)"
+            ),
+            Err(e) => panic!("CMP_ACC_PLUS_F_MEASURED_SELFTEST: FAIL: {e}"),
+        }
+        if std::env::var("CMP_ACC_PLUS_F_MEASURED_SELFTEST_ONLY").ok().as_deref() == Some("1") {
+            return Vec::new();
+        }
+    }
     build_builder().ops
 }
 
@@ -1968,6 +1979,100 @@ pub fn cmp_acc_plus_f_ge_p_selftest() -> Result<(), String> {
         }
         if got_flag != want_flag {
             return Err(format!("flag wrong acc={av} f={fv}: got {got_flag} want {want_flag}"));
+        }
+    }
+    Ok(())
+}
+
+/// Standalone selftest for `cmp_acc_plus_f_ge_p_measured` — the SOUND-OPT-2
+/// peak-cheap, MEASURED (phase-clean) underflow comparator. For an n-bit toy
+/// modulus it checks, over many packed (acc,f) shots AND several independent
+/// Hmr rng seeds, that:
+///   (1) flag == (acc + f >= p)   on general inputs (the SET-carry fix),
+///   (2) acc and f are restored bit-for-bit (measured inverses are exact),
+///   (3) the global phase is 0 (the MEASURED Hmr/cz_if uncompute cancels —
+///       this is the property the apply phase's cancellation depends on; a
+///       pure-unitary or mis-paired uncompute would leave residual phase).
+/// Because the comparator uses Hmr (real measurement), property (3) is checked
+/// over multiple seeds: a correct measured uncompute is phase-0 for EVERY rng
+/// stream, so any seed-dependent phase residue is a bug. Invoke via
+/// `CMP_ACC_PLUS_F_MEASURED_SELFTEST=1 build_circuit`.
+pub fn cmp_acc_plus_f_ge_p_measured_selftest() -> Result<(), String> {
+    use crate::point_add::arith::cmp_acc_plus_f_ge_p_measured;
+    const NB: usize = 7;
+    let p_small: u64 = 101; // odd prime, < 2^NB = 128
+    let c = U256::from((1u64 << NB) - p_small);
+
+    let mut b = B::new();
+    let acc = b.alloc_qubits(NB);
+    let f = b.alloc_qubits(NB);
+    let flag = b.alloc_qubit();
+    cmp_acc_plus_f_ge_p_measured(&mut b, &acc, &f, c, flag);
+    let ops = b.ops;
+    let nq = b.next_qubit as usize;
+    let nb = b.next_bit as usize;
+
+    // Pack 64 (acc,f) pairs, one per shot (acc,f in [0,p)). Includes the
+    // adversarial case acc=35,f=68,p=101 (acc+f=103>=101 -> flag 1) that the
+    // XOR-injection `_into` variant got wrong.
+    let mut cases: Vec<(u64, u64)> = (0..62u64)
+        .map(|s| ((s * 7) % p_small, (s * 13 + 3) % p_small))
+        .collect();
+    cases.push((35, 68)); // the SOUND-OPT-1 counterexample
+    cases.push((100, 100)); // both near top: 200 >= 101 -> 1
+
+    // Run over several INDEPENDENT Hmr seeds; a correct measured uncompute is
+    // phase-0 and value-exact for every seed.
+    for seed_idx in 0..8u64 {
+        let mut seed = sha3::Shake128::default();
+        {
+            use sha3::digest::Update;
+            seed.update(b"cmp-acc-plus-f-ge-p-measured-selftest");
+            seed.update(&seed_idx.to_le_bytes());
+        }
+        let mut xof = {
+            use sha3::digest::ExtendableOutput;
+            seed.finalize_xof()
+        };
+        let mut sim = Simulator::new(nq, nb, &mut xof);
+        sim.clear_for_shot();
+        for (shot, &(av, fv)) in cases.iter().enumerate() {
+            for k in 0..NB {
+                if (av >> k) & 1 != 0 {
+                    *sim.qubit_mut(acc[k]) |= 1u64 << shot;
+                }
+                if (fv >> k) & 1 != 0 {
+                    *sim.qubit_mut(f[k]) |= 1u64 << shot;
+                }
+            }
+        }
+        sim.apply_iter(ops.iter());
+        if sim.phase != 0 {
+            return Err(format!(
+                "seed {seed_idx}: phase garbage 0x{:x} (measured uncompute must cancel)",
+                sim.phase
+            ));
+        }
+        for (shot, &(av, fv)) in cases.iter().enumerate() {
+            let mut got_acc = 0u64;
+            let mut got_f = 0u64;
+            for k in 0..NB {
+                got_acc |= ((sim.qubit(acc[k]) >> shot) & 1) << k;
+                got_f |= ((sim.qubit(f[k]) >> shot) & 1) << k;
+            }
+            let got_flag = (sim.qubit(flag) >> shot) & 1;
+            let want_flag = if av + fv >= p_small { 1 } else { 0 };
+            if got_acc != av {
+                return Err(format!("seed {seed_idx}: acc not restored shot {shot}: got {got_acc} want {av}"));
+            }
+            if got_f != fv {
+                return Err(format!("seed {seed_idx}: f not restored shot {shot}: got {got_f} want {fv}"));
+            }
+            if got_flag != want_flag {
+                return Err(format!(
+                    "seed {seed_idx}: flag wrong acc={av} f={fv}: got {got_flag} want {want_flag}"
+                ));
+            }
         }
     }
     Ok(())

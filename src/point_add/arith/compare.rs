@@ -665,6 +665,91 @@ pub(crate) fn cmp_acc_plus_f_ge_p_into(
     b.free(c_in);
 }
 
+/// Exact, **peak-cheap, phase-clean (MEASURED)** underflow-correction comparator
+/// for the apply-phase modular subtract. Computes
+///
+///     flag ^= ( acc + f >= p )        (equivalently  acc >= (p - f) mod p)
+///
+/// where `c = 2^n - p` (the secp256k1 Solinas constant 2^32 + 977 — sparse), so
+/// `acc + f >= p  ⟺  acc + f + c >= 2^n  ⟺  carry-out of acc + f + c is 1`.
+///
+/// This is the CORRECT (SOUND-OPT-2) successor to `cmp_acc_plus_f_ge_p_into`:
+///
+///  - VALUE-CORRECT on general inputs. The constant `c` is added into `f` by a
+///    genuine reversible majority-carry constant-add (`cadd_nbit_const_direct_fast`,
+///    SET-carry recurrence) on an EXTENDED `f` register (one clean overflow bit),
+///    NOT by an `X`-toggle of a running-carry lane. `f' = f + c` is then summed
+///    with `acc` (zero-extended to the same width) by a clean Cuccaro carry-array
+///    sweep whose top carry-out is exactly `(acc + f + c) >> n = (acc + f >= p)`.
+///    Both the const-add and the f-restore are exact inverses, so `acc` and `f`
+///    exit bit-for-bit unchanged. (The prior `_into` variant XOR-injected the
+///    constant into the in-place carry lane — value-wrong when that lane was
+///    already 1; the selftest `acc=35,f=68,p=101` caught it.)
+///
+///  - PHASE-CLEAN. The carry array is uncomputed with the MEASURED (Hmr/Gidney)
+///    backward sweep — `b.hmr` + `b.cz_if`, identical in structure to
+///    `cmp_lt_into_fast`/`cuccaro_add_fast` — so the apply phase's measured-
+///    uncompute phase cancellation (which depends on the Hmr/rng-stream structure)
+///    is preserved. A pure-unitary uncompute (`cmp_lt_into`, `inv_maj`) breaks it
+///    (SOUND-OPT-1 §3b); this one does not.
+///
+///  - PEAK-CHEAP. It allocates one extension bit on `f`, the const-add's internal
+///    (n-1) carry ancillae (freed before the main sweep), and the main sweep's
+///    (n) carry ancillae + 1 carry-in — i.e. ~n transient qubits — instead of the
+///    full n=256-qubit `load_const` register that `mod_neg_inplace_fast` (the 2292
+///    binder) materialized. The const-add and main sweep do NOT overlap their
+///    carry arrays, so the transient peak is ~n, not 2n.
+pub(crate) fn cmp_acc_plus_f_ge_p_measured(
+    b: &mut B,
+    acc: &[QubitId],
+    f: &[QubitId],
+    c: U256,
+    flag: QubitId,
+) {
+    let n = acc.len();
+    assert_eq!(n, f.len());
+    assert!(n > 0);
+
+    // acc, f ∈ [0, p) ⊂ [0, 2^n), so acc + f + c ∈ [0, 2p + c) ⊂ [0, 2^(n+1)).
+    // Thus `(acc + f >= p) ⟺ (acc + f + c >= 2^n) ⟺ bit n of the (n+1)-bit sum
+    // acc + f + c`. We materialize that sum into an extended copy of acc, read
+    // bit n into `flag`, then run the EXACT measured inverses to restore acc & f.
+
+    // Extend acc with a clean overflow bit: acc_ext holds the (n+1)-bit sum.
+    let acc_ovf = b.alloc_qubit();
+    let mut acc_ext = acc.to_vec();
+    acc_ext.push(acc_ovf);
+
+    // Extend f with a clean overflow bit so `acc_ext += f` is a clean (n+1)-bit
+    // add with no truncation (f < 2^n, top bit stays 0; it only hosts the add's
+    // internal carry transient and is restored to 0).
+    let f_ovf = b.alloc_qubit();
+    let mut f_ext = f.to_vec();
+    f_ext.push(f_ovf);
+
+    // acc_ext += f   (MEASURED Cuccaro-fast: carry array + Hmr/cz_if uncompute).
+    let c_in_add = b.alloc_qubit();
+    cuccaro_add_fast(b, &f_ext, &acc_ext, c_in_add);
+    b.free(c_in_add);
+
+    // acc_ext += c   (MEASURED direct const-add: SET-carry majority + Hmr uncompute,
+    // no load_const register). Now acc_ext = acc + f + c  (< 2^(n+1)).
+    add_nbit_const_direct_uncontrolled_fast(b, &acc_ext, c);
+
+    // bit n of acc_ext == (acc + f + c >= 2^n) == (acc + f >= p).
+    b.cx(acc_ext[n], flag);
+
+    // Restore acc_ext to acc: exact MEASURED inverses, in reverse order.
+    sub_nbit_const_direct_uncontrolled_fast(b, &acc_ext, c);
+    let c_in_sub = b.alloc_qubit();
+    cuccaro_sub_fast(b, &f_ext, &acc_ext, c_in_sub);
+    b.free(c_in_sub);
+
+    // f_ext top bit and acc_ext top bit are clean 0 again; release them.
+    b.free(f_ovf);
+    b.free(acc_ovf);
+}
+
 pub(crate) fn cmp_lt_into(b: &mut B, u: &[QubitId], v: &[QubitId], flag: QubitId) {
     let n = u.len();
     assert_eq!(n, v.len());

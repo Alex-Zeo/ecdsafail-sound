@@ -1919,6 +1919,24 @@ pub(crate) fn dialog_gcd_cmod_sub_materialized_pseudomersenne_with_clean_scratch
     if dialog_gcd_raw_apply_truncated_clean_enabled() {
         dialog_gcd_clean_truncated_underflow(b, acc, a, ctrl, acc_ovf, step);
     } else if std::env::var("DIALOG_GCD_UNDERFLOW_CLEAN_CMP").ok().as_deref()
+        == Some("acc_plus_f_measured")
+    {
+        // SOUND-OPT-2 low-peak comparator. Computes the SAME predicate as the
+        // baseline `acc_ovf ^= (acc + f >= p)`, but WITHOUT the peak-binding
+        // `mod_neg_inplace_fast` (whose `load_const(n=256)` is the 2292 binder).
+        // It materializes `acc + f + c` (c = 2^n - p) in an extended copy of acc
+        // via the MEASURED Cuccaro-fast add + the MEASURED SET-carry direct
+        // const-add, reads bit n into acc_ovf, then runs the EXACT measured
+        // inverses to restore acc & f. VALUE-CORRECT (general inputs; SET-carry
+        // const-add, not XOR injection) AND phase-clean (measured Hmr uncompute
+        // preserves the apply phase's cancellation structure). See SOUND-OPT-2.md.
+        // Polarity: `cmp_acc_plus_f_ge_p_measured` computes acc_ovf ^= (acc+f>=p)
+        // DIRECTLY (no leading X), matching the net of the baseline's
+        // `x(acc_ovf); mod_neg; cmp_lt_into_fast(acc<p-f); mod_neg` =
+        // `acc_ovf ^= (acc>=p-f)` = `acc_ovf ^= (acc+f>=p)`.
+        let c = U256::MAX.wrapping_sub(p).wrapping_add(U256::from(1u64));
+        cmp_acc_plus_f_ge_p_measured(b, acc, &f, c, acc_ovf);
+    } else if std::env::var("DIALOG_GCD_UNDERFLOW_CLEAN_CMP").ok().as_deref()
         == Some("acc_plus_f")
     {
         // EXPERIMENTAL low-peak comparator (SOUND-OPT-1). Replaces the peak-binding
