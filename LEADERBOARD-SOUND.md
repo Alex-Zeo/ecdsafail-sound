@@ -10,9 +10,10 @@ use the grader-printed avg-executed-Toffoli.
 |---|---|---|---|---|---|---|
 | — | Google (low-qubit, ZKP-validated) | **1175** | — (full-Shor) | — | ✅ | reference frontier, arXiv 2603.28846 |
 | — | Google (low-gate) | 1425 | — | — | ✅ | reference frontier |
-| **1** | **measured SET-carry cmp (SOUND-OPT-2) — SOTA** | **2039** | **3,398,114** | **6,928,754,446** | ✅ 0/0/0 × 8 fresh seeds | `DIALOG_GCD_UNDERFLOW_CLEAN_CMP=acc_plus_f_measured`; removes the peak-binding 256-q `load_const`; value-correct (selftest) + sound |
-| 2 | value-exact baseline | 2292 | 3,294,353 | 7,550,657,076 | ✅ 0/0/0 × ~35 fresh seeds | PROD65 + SQ_CARRY_HOST + wide variable-width |
-| 3 | naive correct (full-width, no levers) | 2292 | ~3,847,387 | ~8.82e9 | ✅ | the value-exact levers cut Toffoli ~14% at no peak cost |
+| **1** | **borrowed-carry cmp (SOUND-OPT-3) — SOTA** | **2034** | **3,398,102** | **6,911,739,468** | ✅ 0/0/0 × 8 fresh seeds | branch `descend-B` (a05c649); `DIALOG_GCD_UNDERFLOW_CLEAN_CMP=acc_plus_f_measured_borrowed`; borrows the 5-cell compressed block (−5q), drop-in-equivalent to the 2039 lever |
+| 2 | measured SET-carry cmp (SOUND-OPT-2) | 2039 | 3,398,114 | 6,928,754,446 | ✅ 0/0/0 × 8 fresh seeds | `DIALOG_GCD_UNDERFLOW_CLEAN_CMP=acc_plus_f_measured`; removes the peak-binding 256-q `load_const` |
+| 3 | value-exact baseline | 2292 | 3,294,353 | 7,550,657,076 | ✅ 0/0/0 × ~35 fresh seeds | PROD65 + SQ_CARRY_HOST + wide variable-width |
+| 4 | naive correct (full-width, no levers) | 2292 | ~3,847,387 | ~8.82e9 | ✅ | the value-exact levers cut Toffoli ~14% at no peak cost |
 | ✗ | race-1217 ("frontier", nonce-gamed) | 1217 | 1,401,748 | ~1.71e9 | ❌ **INVALID** | 17–22 classical + 10–13 phase mismatches under independent seeds |
 
 > **Verification note (2026-06-11).** An intermediate analysis (SOUND-OPT-2) flagged a phase hazard
