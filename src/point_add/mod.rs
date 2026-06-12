@@ -1732,6 +1732,15 @@ pub fn build() -> Vec<Op> {
             Err(e) => panic!("FOLD_FREED_TAIL_SELFTEST: FAIL: {e}"),
         }
     }
+    if std::env::var("CMP_ACC_PLUS_F_SELFTEST").is_ok() {
+        match cmp_acc_plus_f_ge_p_selftest() {
+            Ok(()) => eprintln!("CMP_ACC_PLUS_F_SELFTEST: PASS (value-exact, acc/f restored, phase 0)"),
+            Err(e) => panic!("CMP_ACC_PLUS_F_SELFTEST: FAIL: {e}"),
+        }
+        if std::env::var("CMP_ACC_PLUS_F_SELFTEST_ONLY").ok().as_deref() == Some("1") {
+            return Vec::new();
+        }
+    }
     build_builder().ops
 }
 
@@ -1889,6 +1898,80 @@ pub fn square_window_selftest() -> Result<(), String> {
     Ok(())
 }
 
+
+/// Standalone selftest for `cmp_acc_plus_f_ge_p_into` — the peak-cheap exact
+/// underflow comparator. For an n-bit toy modulus it checks, over many packed
+/// (acc,f) shots, that the flag equals `(acc + f >= p)`, that acc and f are
+/// restored bit-for-bit, and that the global phase stays 0 (the comparator must
+/// be pure-unitary). Invoke via `CMP_ACC_PLUS_F_SELFTEST=1 build_circuit`.
+/// (Uses an env-gated selftest, not `#[cfg(test)]`, because the test module does
+/// not compile on this base — see `fold_freed_tail_selftest`.)
+pub fn cmp_acc_plus_f_ge_p_selftest() -> Result<(), String> {
+    use crate::point_add::arith::cmp_acc_plus_f_ge_p_into;
+    const NB: usize = 7;
+    let p_small: u64 = 101; // odd prime, < 2^NB = 128
+    let c = U256::from((1u64 << NB) - p_small);
+
+    let mut b = B::new();
+    let acc = b.alloc_qubits(NB);
+    let f = b.alloc_qubits(NB);
+    let flag = b.alloc_qubit();
+    cmp_acc_plus_f_ge_p_into(&mut b, &acc, &f, c, flag);
+    let ops = b.ops;
+    let nq = b.next_qubit as usize;
+    let nb = b.next_bit as usize;
+
+    // Pack 64 (acc,f) pairs, one per shot (acc,f in [0,p)).
+    let cases: Vec<(u64, u64)> = (0..64u64)
+        .map(|s| ((s * 7) % p_small, (s * 13 + 3) % p_small))
+        .collect();
+
+    let mut seed = sha3::Shake128::default();
+    {
+        use sha3::digest::Update;
+        seed.update(b"cmp-acc-plus-f-ge-p-selftest");
+    }
+    let mut xof = {
+        use sha3::digest::ExtendableOutput;
+        seed.finalize_xof()
+    };
+    let mut sim = Simulator::new(nq, nb, &mut xof);
+    sim.clear_for_shot();
+    for (shot, &(av, fv)) in cases.iter().enumerate() {
+        for k in 0..NB {
+            if (av >> k) & 1 != 0 {
+                *sim.qubit_mut(acc[k]) |= 1u64 << shot;
+            }
+            if (fv >> k) & 1 != 0 {
+                *sim.qubit_mut(f[k]) |= 1u64 << shot;
+            }
+        }
+    }
+    sim.apply_iter(ops.iter());
+    if sim.phase != 0 {
+        return Err(format!("phase garbage 0x{:x} (comparator must be phase-exact)", sim.phase));
+    }
+    for (shot, &(av, fv)) in cases.iter().enumerate() {
+        let mut got_acc = 0u64;
+        let mut got_f = 0u64;
+        for k in 0..NB {
+            got_acc |= ((sim.qubit(acc[k]) >> shot) & 1) << k;
+            got_f |= ((sim.qubit(f[k]) >> shot) & 1) << k;
+        }
+        let got_flag = (sim.qubit(flag) >> shot) & 1;
+        let want_flag = if av + fv >= p_small { 1 } else { 0 };
+        if got_acc != av {
+            return Err(format!("acc not restored shot {shot}: got {got_acc} want {av}"));
+        }
+        if got_f != fv {
+            return Err(format!("f not restored shot {shot}: got {got_f} want {fv}"));
+        }
+        if got_flag != want_flag {
+            return Err(format!("flag wrong acc={av} f={fv}: got {got_flag} want {want_flag}"));
+        }
+    }
+    Ok(())
+}
 
 /// Standalone differential selftest for the fused-fold freed-tail lever
 /// (`DIALOG_GCD_FOLD_FREED_TAIL`). Runs in the normal (non-test) build because

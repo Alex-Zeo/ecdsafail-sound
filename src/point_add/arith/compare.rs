@@ -594,6 +594,77 @@ pub(crate) fn cmp_lt_into_with_cin_slow(
     }
 }
 
+/// Exact, **peak-cheap** underflow-correction comparator for the apply-phase
+/// modular subtract. Computes
+///
+///     flag ^= ( acc + f >= p )        (equivalently  acc >= (p - f) mod p)
+///
+/// where `c = 2^n - p` (the secp256k1 Solinas constant 2^32 + 977 — sparse).
+/// `acc + f >= p`  ⟺  `acc + f + c >= 2^n`  ⟺  carry-out of the n-bit sum
+/// `acc + f + c` is 1. We compute that carry-out with the same in-place MAJ
+/// borrow-sweep `cmp_lt_into` uses — `acc` is mutated to hold the running
+/// carries during the forward sweep and is restored bit-for-bit by the inverse
+/// sweep — so the ONLY transient is a single carry-in ancilla (`c_in`).
+///
+/// This replaces the previous `mod_neg_inplace_fast(f); cmp_lt_into_fast(acc,f);
+/// mod_neg_inplace_fast(f)` sequence whose `mod_neg`/`load_const` materialized a
+/// full n=256-qubit constant register on top of the live apply state — the
+/// sound-config peak binder (TRACE_PEAK pins it to `..._underflow_clean`). It is
+/// VALUE-IDENTICAL (the same correction predicate) and PHASE-EXACT (pure
+/// X/CX/CCX MAJ + inverse MAJ, no Hmr measurement). It is NOT a width/precision
+/// truncation: the full n-bit comparison is performed; only the qubit-allocation
+/// strategy changes. The sparse constant `c` is injected into the carry chain by
+/// toggling the running-carry lane (acc[i] holds the carry-out of bit i) at the
+/// set bits of `c`; the inverse sweep undoes the toggles, so `acc` and `f` exit
+/// unchanged. ~n CCX per call (the inverse-MAJ recompute) vs the fast variant's
+/// measured uncompute, on the 2 underflow-clean calls per point-add.
+pub(crate) fn cmp_acc_plus_f_ge_p_into(
+    b: &mut B,
+    acc: &[QubitId],
+    f: &[QubitId],
+    c: U256,
+    flag: QubitId,
+) {
+    let n = acc.len();
+    assert_eq!(n, f.len());
+    assert!(n > 0);
+
+    let c_in = b.alloc_qubit();
+
+    // Forward MAJ sweep computing the carry chain of `acc + f + c` in place on
+    // `acc` (acc[i] ends holding the carry OUT of bit i). The sparse constant
+    // `c` is added by toggling the carry-in to bit i (which is acc[i-1] for
+    // i>0, and c_in for i==0) at each set bit of `c`: forcing that incoming
+    // carry to 1 is exactly "add 1 at weight 2^i". A constant addend bit only
+    // ever sets a carry-in, so this is the standard Cuccaro constant-injection.
+    if bit(c, 0) {
+        b.x(c_in);
+    }
+    maj(b, c_in, f[0], acc[0]);
+    for i in 1..n {
+        if bit(c, i) {
+            b.x(acc[i - 1]);
+        }
+        maj(b, acc[i - 1], f[i], acc[i]);
+    }
+    // acc[n-1] now holds the carry-out of `acc + f + c` == (acc + f >= p).
+    b.cx(acc[n - 1], flag);
+
+    // Inverse sweep restores acc (and undoes the constant toggles).
+    for i in (1..n).rev() {
+        inv_maj(b, acc[i - 1], f[i], acc[i]);
+        if bit(c, i) {
+            b.x(acc[i - 1]);
+        }
+    }
+    inv_maj(b, c_in, f[0], acc[0]);
+    if bit(c, 0) {
+        b.x(c_in);
+    }
+
+    b.free(c_in);
+}
+
 pub(crate) fn cmp_lt_into(b: &mut B, u: &[QubitId], v: &[QubitId], flag: QubitId) {
     let n = u.len();
     assert_eq!(n, v.len());

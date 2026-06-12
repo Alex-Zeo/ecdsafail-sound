@@ -1918,7 +1918,41 @@ pub(crate) fn dialog_gcd_cmod_sub_materialized_pseudomersenne_with_clean_scratch
     b.set_phase("dialog_gcd_materialized_special_underflow_clean");
     if dialog_gcd_raw_apply_truncated_clean_enabled() {
         dialog_gcd_clean_truncated_underflow(b, acc, a, ctrl, acc_ovf, step);
+    } else if std::env::var("DIALOG_GCD_UNDERFLOW_CLEAN_CMP").ok().as_deref()
+        == Some("acc_plus_f")
+    {
+        // EXPERIMENTAL low-peak comparator (SOUND-OPT-1). Replaces the peak-binding
+        // `mod_neg_inplace_fast` (whose `load_const(n=256)` is the sound-config
+        // peak binder at 2292, phase `..._underflow_clean`) with a single in-place
+        // MAJ carry-out of `acc + f + c` (c = 2^n - p). DROPS the build-time peak
+        // 2292 -> 1911 and is 0-classical / 0-ancilla on the secp support, BUT IS
+        // NOT VALID: (1) the sparse-constant injection is value-wrong on general
+        // inputs (CMP_ACC_PLUS_F_SELFTEST fails: acc=35,f=68,p=101 -> flag 0, want
+        // 1 — forcing a running carry with X is XOR not SET); (2) it fails the
+        // sound grader's PHASE check (141/141 batches). Gated OFF; kept for the
+        // SOUND-OPT-1.md writeup / regression evidence.
+        let c = U256::MAX.wrapping_sub(p).wrapping_add(U256::from(1u64));
+        cmp_acc_plus_f_ge_p_into(b, acc, &f, c, acc_ovf);
+    } else if std::env::var("DIALOG_GCD_UNDERFLOW_CLEAN_CMP").ok().as_deref() == Some("slow") {
+        // EXPERIMENTAL value-correct path (SOUND-OPT-1): keep mod_neg, uncompute
+        // the comparator carry with the slow pure-unitary 1-ancilla `cmp_lt_into`.
+        // VALUE-EXACT (0 classical / 0 ancilla, all seeds) but the negation is
+        // kept so the build-time peak STAYS 2292; and it ALSO fails the grader's
+        // PHASE check (~141/141): swapping the comparator's measured (Hmr)
+        // uncompute for a pure-unitary one removes Hmr/rng structure the apply
+        // phase's measured-uncompute cancellation depends on. See SOUND-OPT-1.md.
+        b.x(acc_ovf);
+        mod_neg_inplace_fast(b, &f, p);
+        cmp_lt_into(b, acc, &f, acc_ovf);
+        mod_neg_inplace_fast(b, &f, p);
     } else {
+        // SOUND BASELINE exact underflow correction (default): compute
+        // `acc_ovf ^= (acc >= (p - f) mod p)` by materializing `-f mod p`
+        // (mod_neg) then the measured wide-carry comparator. The mod_neg's
+        // `load_const(n=256)` binds the sound peak at 2292. NOTE: this baseline is
+        // NOT robustly phase-clean across independent grader seeds (see
+        // SOUND-OPT-1.md) — it is the established 2292 reference, not a proven
+        // 0/0/0-over-K-seeds circuit.
         b.x(acc_ovf);
         mod_neg_inplace_fast(b, &f, p);
         cmp_lt_into_fast(b, acc, &f, acc_ovf);
