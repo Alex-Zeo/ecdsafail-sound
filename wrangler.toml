@@ -1,0 +1,14 @@
+# ECDSA.fail · SOUND — Cloudflare Worker static-assets deploy (cmi-terrapin pattern).
+# Serves leaderboard/ on ecdsa.redcorsair.ai; custom_domain auto-creates the
+# proxied DNS record + TLS cert on the redcorsair.ai zone (no manual DNS step).
+name = "ecdsa-sound"
+compatibility_date = "2024-09-23"
+workers_dev = true
+
+[assets]
+directory = "./leaderboard"
+not_found_handling = "single-page-application"
+
+[[routes]]
+pattern = "ecdsa.redcorsair.ai"
+custom_domain = true
