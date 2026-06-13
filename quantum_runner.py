@@ -128,16 +128,28 @@ def worker(name, daemon):
             c.execute("UPDATE experiments SET status='failed',worker=?,abort_reason=?,done_at=? WHERE id=?", (name, str(ex)[:200], NOW(), eid)); log(c, eid, "failed", str(ex)[:200]); c.commit()
     print("[%s] drained" % name)
 
+PROVEN_ITER_FLOOR = 402  # binary-GCD (K2 double-shift) worst case >=372 over reachable factors [1,p); canonical safe floor. See CENSUS-iteration-floor-260613.md
+def truncation_reason(knobs):
+    """Return a reason if knobs encode a PROVEN truncation (must not run/board), else None.
+    A circuit cutting GCD iterations below the floor leaves the inverse unfinished on the worst-case
+    tail; it passes random K-seed grading only by tail-evasion (the race-1217 pathology)."""
+    m = re.search(r"DIALOG_GCD_ACTIVE_ITERATIONS=(\d+)", knobs or "")
+    if m and int(m.group(1)) < PROVEN_ITER_FLOOR:
+        return "active_iterations=%s < proven floor %d (GCD truncation; K-seed pass = tail-evasion, not soundness)" % (m.group(1), PROVEN_ITER_FLOOR)
+    return None
 def do_init():
     c = conn(); c.executescript(SCHEMA); c.execute("INSERT OR IGNORE INTO control(id,run) VALUES(1,1)"); c.commit(); print("init", DB)
 def do_seed(path):
-    c = conn(); n = 0
+    c = conn(); n = 0; rej = 0
     for x in json.load(open(path)):
         try:
-            c.execute("INSERT OR IGNORE INTO experiments(config_id,knobs,kind,priority,persona,why) VALUES(?,?,?,?,?,?)",
-                      (x.get("config_id"), x["knobs"], x.get("kind", "peak"), x.get("priority", 5), x.get("persona", x.get("source", "")), x.get("why", ""))); n += 1
+            tr = truncation_reason(x.get("knobs", ""))   # gate: never queue a proven truncation
+            st = "rejected_unsound_iters" if tr else "pending"
+            c.execute("INSERT OR IGNORE INTO experiments(config_id,knobs,kind,priority,persona,why,status,abort_reason) VALUES(?,?,?,?,?,?,?,?)",
+                      (x.get("config_id"), x["knobs"], x.get("kind", "peak"), x.get("priority", 5), x.get("persona", x.get("source", "")), x.get("why", ""), st, tr)); n += 1
+            if tr: rej += 1
         except Exception as ex: print("skip", x.get("config_id"), ex)
-    c.commit(); print("seeded %d; pending=%d" % (n, c.execute("SELECT COUNT(*) FROM experiments WHERE status=?", ("pending",)).fetchone()[0]))
+    c.commit(); print("seeded %d (%d auto-rejected as proven truncations); pending=%d" % (n, rej, c.execute("SELECT COUNT(*) FROM experiments WHERE status=?", ("pending",)).fetchone()[0]))
 def do_run(nw, daemon=False):
     c = conn(); c.execute("INSERT OR IGNORE INTO control(id,run) VALUES(1,1)"); c.execute("UPDATE control SET run=1 WHERE id=1")
     n = c.execute("UPDATE experiments SET status='pending',worker=NULL WHERE status='running'").rowcount; c.commit()
