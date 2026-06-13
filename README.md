@@ -31,13 +31,17 @@ the upstream board fails **17–22 of a fresh random sample**.)
 | circuit | peak qubits | avg Toffoli | score (q×T) | validation |
 |---|---|---|---|---|
 | Google (low-qubit, ZKP) | **1175** | — | — | reference / target |
-| **borrowed-carry comparator (SOUND-OPT-3)** | **2034** | 3,398,102 | **6,911,739,468** | 0/0/0 × 8 fresh seeds |
+| **phase-conditioned comparator (SOUND-OPT-5)** | **2034** | **3,192,240** | **6,493,016,160** | 0/0/0 × 8 fresh seeds |
+| borrowed-carry comparator (SOUND-OPT-3) | 2034 | 3,398,102 | 6,911,739,468 | 0/0/0 × 8 |
 | measured SET-carry comparator (SOUND-OPT-2) | 2039 | 3,398,114 | 6,928,754,446 | 0/0/0 × 8 |
+| windowed comparator (SOUND-OPT-4) — *lowest peak* | **1926** | 3,603,901 | 6,941,113,326 | 0/0/0 × 8 (q×T regression) |
 | value-exact baseline (SOUND-OPT-1) | 2292 | 3,294,353 | 7,550,657,076 | 0/0/0 × ~35 |
 | ~~race-1217 (upstream "frontier")~~ | ~~1217~~ | ~~1,401,748~~ | ~~1,705,927,316~~ | **INVALID** — fails under independent seeds |
 
-Honest cost of this codebase: **2034 qubits ≈ 1.73× Google's correct 1175**; the open problem is
-closing that gap *honestly*. See `SOUND-OPT-{1,2,3}.md` and `SOUND-BASELINE.md`.
+q×T SOTA: **6,493,016,160** (SOUND-OPT-5 — phase-conditioned comparator replay, −6.06% via halving the
+per-iteration underflow comparator's *executed* Toffoli at a held 2034 peak). Lowest *peak* is **1926**
+(SOUND-OPT-4, but a q×T regression). The open problem is closing the gap to Google's **1175** *honestly*.
+See `SOUND-OPT-{1,2,3,4,5}.md` and `SOUND-BASELINE.md`.
 
 ## Reproduce
 
