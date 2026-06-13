@@ -47,12 +47,16 @@
   .lb-sub{font:500 11px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted-fg);margin:22px 0 4px}
   table{width:100%;border-collapse:collapse} thead th{font:500 11px/1 var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted-fg);text-align:left;padding:14px 12px;border-bottom:1px solid var(--border)} thead th.r{text-align:right}
   tbody td{padding:16px 12px;border-bottom:1px solid var(--border);vertical-align:middle} tbody tr{cursor:pointer} tbody tr:hover{background:var(--muted)}
-  .solver{display:flex;align-items:center;gap:12px} .av{width:34px;height:34px;border-radius:50%;flex:0 0 34px;display:flex;align-items:center;justify-content:center;font:600 13px/1 var(--mono);color:#fff}
+  .solver{display:flex;align-items:center;gap:12px} .av{width:34px;height:34px;border-radius:50%;flex:0 0 34px;display:flex;align-items:center;justify-content:center;font:600 13px/1 var(--mono);color:#fff;object-fit:cover}
+  .ghlink{color:var(--muted-fg);font-weight:400;font-size:12.5px;text-decoration:none} .ghlink:hover{color:var(--green)}
   .who{font-weight:600;font-size:15px;display:flex;align-items:center;gap:7px} .crown{color:var(--accent)}
   .mbadge{display:inline-flex;align-items:center;gap:5px;font:500 12px/1 var(--mono);color:var(--muted-fg);background:var(--muted);border:1px solid var(--border);border-radius:7px;padding:5px 8px;margin-top:5px}
   td.score{text-align:right;font:600 17px/1.2 var(--mono);font-variant-numeric:tabular-nums} td.score .tq{display:block;font:400 12px/1 var(--mono);color:var(--muted-fg);margin-top:5px}
   td.diff{text-align:right;font:500 14px/1 var(--mono);color:var(--pos)} td.created{text-align:right;font:400 13px/1.3 var(--mono);color:var(--muted-fg)}
   td.chev{text-align:right;color:var(--muted-fg);font-size:18px;width:24px}
+  .lbtabs{display:flex;gap:6px;margin:20px 0 6px} .lbtab{background:var(--muted);border:1px solid var(--border);color:var(--muted-fg);font:500 13px/1 var(--sans);border-radius:8px;padding:8px 14px;cursor:pointer} .lbtab.on{background:var(--green);color:var(--on-green);border-color:var(--green)}
+  .contrib-row{display:flex;align-items:center;gap:14px;padding:16px 12px;border-bottom:1px solid var(--border)} .cbar{flex:1;height:10px;background:var(--muted);border-radius:999px;overflow:hidden} .cbar i{display:block;height:100%;background:linear-gradient(90deg,var(--green),var(--accent))}
+  .cgain{font:600 16px/1 var(--mono);text-align:right;min-width:160px;color:var(--pos)} .cgain .s{display:block;font:400 12px/1 var(--mono);color:var(--muted-fg);margin-top:5px}
   tr.ref .who{color:var(--accent)} tr.ref .av{background:var(--accent)} tr.bad .who{color:oklch(0.55 0.18 27);text-decoration:line-through} tr.bad .av{background:oklch(0.55 0.18 27)} tr.bad td{color:var(--muted-fg)}
   .vtag{font:600 10px/1 var(--mono);padding:5px 9px;border-radius:999px} .v-ok{background:oklch(0.62 0.13 150 /.16);color:var(--pos)} .v-bad{background:oklch(0.55 0.18 27 /.14);color:oklch(0.55 0.18 27)} .v-ref{background:oklch(0.70 0.18 45 /.14);color:var(--accent)}
   footer{margin-top:30px;padding:26px 0;border-top:1px solid var(--border)} footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;font-size:13px;color:var(--muted-fg)}
@@ -77,8 +81,8 @@
 </head>
 <body>
 <header><div class="wrap">
-  <div><span class="brand">ECDSA<span class="o">.</span>fail <span class="by">by Eigen Labs</span></span><span class="pill-tag">SOUND fork</span></div>
-  <a class="ghbtn" href="https://www.ecdsa.fail/">↗ View the original</a>
+  <div><span class="brand">ECDSA<span class="o">.</span>fail</span><span class="pill-tag">SOUND fork</span><span class="by" style="margin-left:12px">maintained by <a href="https://github.com/Alex-Zeo">Alejandro Gutierrez</a></span></div>
+  <a class="ghbtn" href="https://github.com/Alex-Zeo" title="GitHub sign-in / contribute (coming in v2)"><img src="https://avatars.githubusercontent.com/u/6181715?v=4" alt="" style="width:22px;height:22px;border-radius:50%;margin-right:-2px"> @Alex-Zeo</a>
 </div></header>
 
 <div class="wrap">
@@ -102,12 +106,14 @@
       <div><h2>Leaderboard</h2><div class="sub" id="lbsub">—</div></div>
       <div class="bestbox"><div class="l">Best sound score</div><div class="v" id="bestv">—</div><div class="s" id="bests">—</div></div>
     </div>
-    <p class="lb-sub">Sound submissions · correct circuits only · <span style="color:var(--accent)">click a row for the commit note</span></p>
-    <table><thead><tr><th>Solver / lever</th><th class="r">Score</th><th class="r">Δ vs next</th><th class="r">Validation</th><th></th></tr></thead><tbody id="rows"></tbody></table>
+    <div class="lbtabs"><button class="lbtab on" data-view="best">Best circuit</button><button class="lbtab" data-view="contrib">Top contributors</button></div>
+    <p class="lb-sub" id="lbsubline">Sound submissions · correct circuits only · <span style="color:var(--accent)">click a row for the commit note</span></p>
+    <div id="view-best"><table><thead><tr><th>Solver / lever</th><th class="r">Score</th><th class="r">Δ vs next</th><th class="r">Validation</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>
+    <div id="view-contrib" hidden></div>
   </div>
 </div>
 
-<footer><div class="wrap"><span id="foot">—</span><span>Sound fork of <a href="https://www.ecdsa.fail/">ECDSA.fail</a> · an Eigen Labs project · circuit lineage from Google (arXiv 2603.28846)</span></div></footer>
+<footer><div class="wrap"><span id="foot">—</span><span>SOUND fork maintained by <a href="https://github.com/Alex-Zeo">Alejandro Gutierrez</a> · forked from <a href="https://www.ecdsa.fail/">ECDSA.fail</a> (Eigen Labs) · circuits from Google (arXiv 2603.28846)</span></div></footer>
 
 <div class="overlay" id="overlay"><div class="modal"><div class="modal-h"><div class="t" id="modal-t"></div><button class="modal-x" id="modal-x">×</button></div><div class="modal-b" id="modal-b"></div></div></div>
 
@@ -155,24 +161,35 @@ fetch("leaderboard.json").then(r=>r.json()).then(d=>{
   document.getElementById("bests").textContent=`${fmt(sota.toffoli)} Toffoli · ${sota.qubits} qubits`;
   const rows=document.getElementById("rows"); const all=d.entries.filter(e=>e.score);
   const rowDetail=(e,kind)=>{
-    const av=kind==='ref'?'<div class="av" style="background:var(--accent)">G</div>':kind==='bad'?'<div class="av" style="background:oklch(0.55 0.18 27)">✗</div>':`<div class="av" style="background:oklch(0.55 0.12 ${hue(e.name)})">${initials(e.name)}</div>`;
+    const av=kind==='ref'?'<div class="av" style="background:var(--accent)">G</div>':kind==='bad'?'<div class="av" style="background:oklch(0.55 0.18 27)">✗</div>':`<a href="${M.url}"><img class="av" src="${M.avatar}" alt="${M.name}"></a>`;
     const cards=`<div class="cards"><div class="mc"><div class="l">Score (q×T)</div><div class="v">${fmt(e.score)}${e.toffoli?`<span class="s">${fmt(e.toffoli)} T × ${e.qubits} Q</span>`:`<span class="s">${e.qubits} qubits</span>`}</div></div>`+
       `<div class="mc"><div class="l">Peak qubits</div><div class="v">${e.qubits}</div></div>`+
       `<div class="mc"><div class="l">Validation</div><div class="v" style="font-size:14px;color:${kind==='bad'?'oklch(0.55 0.18 27)':kind==='ref'?'var(--accent)':'var(--pos)'}">${kind==='bad'?'INVALID':kind==='ref'?'ZKP reference':'0/0/0 sound'}</div></div></div>`;
     const knob=e.knob?`<p class="notelabel" style="margin-top:18px">Config</p><span class="knob">${e.knob}</span>`:'';
-    openModal(`${av}<div><h3>${e.name}${e.tag?` <span style="color:var(--muted-fg);font-weight:400;font-size:14px">· ${e.tag}</span>`:''}</h3><div class="mbadge" style="margin-top:4px">${kind==='ref'?'◆ Google · ZKP-validated':kind==='bad'?'gamed · one hunted nonce':'✷ Claude Opus 4.8'}</div></div>`+
+    openModal(`${av}<div><h3>${e.name}${e.tag?` <span style="color:var(--muted-fg);font-weight:400;font-size:14px">· ${e.tag}</span>`:''}</h3><div class="mbadge" style="margin-top:4px">${kind==='ref'?'◆ Google · ZKP-validated':kind==='bad'?'gamed · one hunted nonce':`<a class="ghlink" href="${M.url}">${M.name} · @${M.handle}</a> · ✷ Claude Opus 4.8`}</div></div>`+
       (e.commit?`<span class="vcommit">⌥ ${e.commit}</span>`:''),
       cards+`<p class="notelabel">Note</p><div class="notebox">${paras(e.note)}</div>${knob}`);
   };
   d.reference.forEach(e=>{const tr=document.createElement('tr');tr.className='ref';
     tr.innerHTML=`<td><div class="solver"><div class="av">G</div><div><div class="who">${e.name.split('—')[0].trim()}</div><div class="mbadge">◆ ZKP-validated · ${e.name.includes('low-gate')?'low-gate':'low-qubit'}</div></div></div></td><td class="score">${e.qubits} q<span class="tq">qubit floor · Toffoli n/a (full-Shor)</span></td><td class="diff">—</td><td class="diff"><span class="vtag v-ref">reference</span></td><td class="chev">›</td>`;
     tr.onclick=()=>rowDetail(e,'ref');rows.appendChild(tr);});
+  const M=d.maintainer;
   all.forEach((e,i)=>{const nxt=all[i+1],diff=nxt?nxt.score-e.score:null;const tr=document.createElement('tr');
-    tr.innerHTML=`<td><div class="solver"><div class="av" style="background:oklch(0.55 0.12 ${hue(e.name)})">${initials(e.name)}</div><div><div class="who">${e.rank===1?'<span class="crown">♛</span>':''}${e.name}${e.tag?` <span style="color:var(--muted-fg);font-weight:400;font-size:12px">· ${e.tag}</span>`:''}</div><div class="mbadge">✷ Claude Opus 4.8</div></div></div></td><td class="score">${fmt(e.score)}<span class="tq">${fmt(e.toffoli)} T × ${e.qubits} Q</span></td><td class="diff">${diff?(diff>0?'+':'')+fmt(diff):'—'}</td><td class="diff"><span class="vtag v-ok">0/0/0 sound</span></td><td class="chev">›</td>`;
+    tr.innerHTML=`<td><div class="solver"><a href="${M.url}" onclick="event.stopPropagation()"><img class="av" src="${M.avatar}" alt="${M.name}"></a>
+      <div><div class="who">${e.rank===1?'<span class="crown">♛</span>':''}<a href="${M.url}" onclick="event.stopPropagation()" style="color:inherit;text-decoration:none">${M.name}</a> <a class="ghlink" href="${M.url}" onclick="event.stopPropagation()">@${M.handle}</a></div>
+      <div class="mbadge">${e.name}${e.tag?' · '+e.tag:''} · ✷ Claude Opus 4.8</div></div></div></td><td class="score">${fmt(e.score)}<span class="tq">${fmt(e.toffoli)} T × ${e.qubits} Q</span></td><td class="diff">${diff?(diff>0?'+':'')+fmt(diff):'—'}</td><td class="diff"><span class="vtag v-ok">0/0/0 sound</span></td><td class="chev">›</td>`;
     tr.onclick=()=>rowDetail(e,'ok');rows.appendChild(tr);});
   d.invalid.forEach(e=>{const tr=document.createElement('tr');tr.className='bad';
     tr.innerHTML=`<td><div class="solver"><div class="av">✗</div><div><div class="who">${e.name}</div><div class="mbadge">gamed · one hunted nonce</div></div></div></td><td class="score">${fmt(e.score)}<span class="tq">${fmt(e.toffoli)} T × ${e.qubits} Q</span></td><td class="diff">—</td><td class="diff"><span class="vtag v-bad">INVALID</span></td><td class="chev">›</td>`;
     tr.onclick=()=>rowDetail(e,'bad');rows.appendChild(tr);});
+  // Top-contributors view: per-solver total q×T gain contributed (sum of Δ-vs-next)
+  const totalGain = all[all.length-1].score - all[0].score;
+  const bySolver = {};
+  all.forEach((e,i)=>{const nxt=all[i+1]; const g=nxt?nxt.score-e.score:0;
+    (bySolver[M.name]=bySolver[M.name]||{name:M.name,handle:M.handle,avatar:M.avatar,url:M.url,gain:0,n:0}); bySolver[M.name].gain+=g; bySolver[M.name].n++;});
+  const contrib=Object.values(bySolver).sort((a,b)=>b.gain-a.gain), maxg=Math.max(...contrib.map(c=>c.gain),1);
+  document.getElementById('view-contrib').innerHTML = contrib.map((c,i)=>`<div class="contrib-row">${i===0?'<span class="crown">♛</span>':'<span style="display:inline-block;width:14px"></span>'}<a href="${c.url}"><img class="av" src="${c.avatar}" alt=""></a><div style="min-width:210px"><div class="who"><a href="${c.url}" style="color:inherit;text-decoration:none">${c.name}</a> <a class="ghlink" href="${c.url}">@${c.handle}</a></div><div class="mbadge">${c.n} sound circuit${c.n>1?'s':''} · ✷ Claude Opus 4.8</div></div><div class="cbar"><i style="width:${(c.gain/maxg*100).toFixed(0)}%"></i></div><div class="cgain">−${fmt(c.gain)}<span class="s">${totalGain?Math.round(c.gain/totalGain*100):0}% of all gains</span></div></div>`).join('')+`<p style="padding:16px 12px 0;color:var(--muted-fg);font-size:12.5px;line-height:1.55">Total frontier gain since the naive correct baseline: <b style="color:var(--pos)">−${fmt(totalGain)}</b> (q×T). Contribution = sum of each solver's score improvements over the next-best sound circuit. More contributors appear here as the board opens up (v2).</p>`;
+  document.querySelectorAll('.lbtab').forEach(t=>t.onclick=()=>{document.querySelectorAll('.lbtab').forEach(x=>x.classList.toggle('on',x===t));const v=t.dataset.view;document.getElementById('view-best').hidden=(v!=='best');document.getElementById('view-contrib').hidden=(v!=='contrib');document.getElementById('lbsubline').innerHTML=(v==='best')?'Sound submissions · correct circuits only · <span style="color:var(--accent)">click a row for the commit note</span>':'Top contributors · ranked by total q×T gain contributed to the frontier';});
   document.getElementById("foot").textContent=`Updated ${d.updated} · validated by eval_circuit + grader-controlled sound_seed (independent of the op stream)`;
   // hero modals
   document.querySelectorAll('[data-modal]').forEach(b=>b.onclick=()=>{

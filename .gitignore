@@ -1,7 +1,10 @@
-/target
-.claude/
-score.*
-.autoresearch
-**/.DS_Store
+target/
+*.db
+*.sqlite
+*.sqlite-*
+*.bin
 ops.bin
 results.tsv
+tmp/
+.qbox_ip
+.hctok
