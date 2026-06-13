@@ -57,7 +57,8 @@ def run_peak(knobs):
     os.makedirs(TMP, exist_ok=True); d = tempfile.mkdtemp(dir=TMP)
     try:
         e = envmap(knobs); e["TRACE_PEAK"] = "1"
-        out = subprocess.run([BIN + "/build_circuit"], cwd=d, env=e, capture_output=True, text=True, timeout=400).stdout
+        p = subprocess.run([BIN + "/build_circuit"], cwd=d, env=e, capture_output=True, text=True, timeout=400)
+        out = (p.stdout or "") + (p.stderr or "")  # TRACE_PEAK line is emitted on stderr, not stdout
         m = re.search(r"peak_qubits=(\d+) at phase='([^']+)'", out)
         return (int(m.group(1)), m.group(2)) if m else (None, out.strip()[:120])
     finally:
