@@ -3,108 +3,150 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ecdsa.fail · SOUND</title>
+<title>ECDSA.fail · SOUND — can you break ECDSA? (honestly)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
-  :root { --bg:#0b0e14; --panel:#141925; --line:#232a3a; --ink:#e6edf3; --dim:#8b97a8;
-          --good:#3fb950; --bad:#f85149; --gold:#e3b341; --accent:#58a6ff; }
-  * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--ink);
-         font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
-  .wrap { max-width:1000px; margin:0 auto; padding:32px 20px 64px; }
-  h1 { font-size:30px; margin:0 0 2px; letter-spacing:-.5px; }
-  h1 .sound { color:var(--good); }
-  .tag { color:var(--dim); margin:0 0 24px; font-size:15px; }
-  .why { background:var(--panel); border:1px solid var(--line); border-left:3px solid var(--accent);
-         border-radius:8px; padding:16px 18px; margin:0 0 28px; font-size:14px; color:#c4cdda; }
-  .why b { color:var(--ink); }
-  h2 { font-size:13px; text-transform:uppercase; letter-spacing:1px; color:var(--dim);
-       margin:28px 0 10px; }
-  table { width:100%; border-collapse:collapse; font-size:14px; }
-  th,td { text-align:left; padding:10px 12px; border-bottom:1px solid var(--line); }
-  th { color:var(--dim); font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.5px; }
-  td.num { text-align:right; font-variant-numeric:tabular-nums; }
-  tr.sota td { background:rgba(63,185,80,.06); }
-  tr.sota .rank { color:var(--good); font-weight:700; }
-  tr.ref td { background:rgba(227,179,65,.06); }
-  tr.ref .name { color:var(--gold); }
-  tr.invalid td { color:var(--dim); }
-  tr.invalid .name { color:var(--bad); }
-  .q { font-weight:700; font-size:15px; }
-  .badge { display:inline-block; padding:1px 8px; border-radius:20px; font-size:11px; font-weight:600; }
-  .ok { background:rgba(63,185,80,.15); color:var(--good); }
-  .no { background:rgba(248,81,73,.15); color:var(--bad); }
-  .note { color:var(--dim); font-size:12px; }
-  .bar { height:30px; background:var(--panel); border:1px solid var(--line); border-radius:6px;
-         position:relative; margin:14px 0 6px; overflow:hidden; }
-  .bar .fill { position:absolute; left:0; top:0; bottom:0; background:linear-gradient(90deg,#1f6feb,#3fb950); }
-  .bar .target { position:absolute; top:-4px; bottom:-4px; width:2px; background:var(--gold); }
-  .barlbl { display:flex; justify-content:space-between; color:var(--dim); font-size:12px; }
-  footer { margin-top:36px; color:var(--dim); font-size:12px; border-top:1px solid var(--line); padding-top:14px; }
-  code { background:#1c2333; padding:1px 5px; border-radius:4px; font-size:12px; }
+  /* theme tokens lifted from ecdsa.fail (oklch) */
+  :root{
+    --background:oklch(0.928 0.016 106); --foreground:oklch(0.255 0.012 122);
+    --card:oklch(0.976 0.009 106); --card-fg:oklch(0.255 0.012 122);
+    --border:oklch(0.853 0.013 104); --muted:oklch(0.905 0.014 105); --muted-fg:oklch(0.485 0.008 286);
+    --accent:oklch(0.75 0.185 45); --primary:oklch(0.475 0.095 158); --destructive:oklch(0.58 0.18 27);
+    --radius:0.75rem;
+    --sans:'Geist',ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif;
+    --mono:'Geist Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--background);color:var(--foreground);font-family:var(--sans);line-height:1.5;
+       -webkit-font-smoothing:antialiased}
+  .wrap{max-width:72rem;margin:0 auto;padding:0 1.25rem}
+  header{border-bottom:1px solid var(--border);background:oklch(0.928 0.016 106 / .8);backdrop-filter:blur(8px);position:sticky;top:0;z-index:10}
+  header .wrap{display:flex;align-items:center;justify-content:space-between;height:60px}
+  .brand{font-weight:700;font-size:18px;letter-spacing:-.02em}
+  .brand .dot{color:var(--accent)}
+  .pill{font:500 11px/1 var(--mono);color:var(--primary);border:1px solid var(--primary);
+        border-radius:999px;padding:4px 9px;margin-left:8px;vertical-align:middle}
+  .navlinks{font-size:13px;color:var(--muted-fg);display:flex;gap:18px}
+  /* hero */
+  .hero{padding:64px 0 36px;text-align:center}
+  .hero h1{font-size:clamp(34px,6vw,56px);font-weight:700;letter-spacing:-.03em;margin:0 0 10px}
+  .hero h1 .dot{color:var(--accent)}
+  .hero .q{font-size:clamp(17px,2.4vw,22px);color:var(--muted-fg);margin:0 auto 8px;max-width:42rem}
+  .hero .sub{font-size:14px;color:var(--muted-fg);max-width:46rem;margin:14px auto 0}
+  /* cards */
+  .grid{display:grid;gap:20px}
+  @media(min-width:760px){.cols3{grid-template-columns:repeat(3,1fr)}}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:20px 22px}
+  .label{font:500 11px/1 var(--mono);text-transform:uppercase;letter-spacing:.08em;color:var(--muted-fg)}
+  .big{font:700 34px/1.1 var(--mono);letter-spacing:-.02em;margin:8px 0 2px}
+  .big.accent{color:var(--accent)} .big.primary{color:var(--primary)}
+  .cap{font-size:12.5px;color:var(--muted-fg)}
+  section{padding:30px 0}
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted-fg);font-weight:600;margin:0 0 14px}
+  .note{background:var(--card);border:1px solid var(--border);border-left:3px solid var(--accent);
+        border-radius:var(--radius);padding:16px 18px;font-size:14px;color:var(--card-fg)}
+  .note b{font-weight:600}
+  /* leaderboard table */
+  table{width:100%;border-collapse:collapse;font-size:14px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+  th,td{text-align:left;padding:12px 14px;border-bottom:1px solid var(--border)}
+  th{font:600 11px/1 var(--mono);text-transform:uppercase;letter-spacing:.06em;color:var(--muted-fg);background:var(--muted)}
+  tbody tr:last-child td{border-bottom:none}
+  td.n{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
+  td.model{font-weight:500}
+  tr.best{background:oklch(0.475 0.095 158 / .07)}
+  tr.best .rk{color:var(--primary);font-weight:700}
+  tr.ref{background:oklch(0.75 0.185 45 / .07)} tr.ref .model{color:var(--accent)}
+  tr.bad td{color:var(--muted-fg)} tr.bad .model{color:var(--destructive);text-decoration:line-through}
+  .badge{display:inline-block;font:600 10px/1 var(--mono);padding:4px 8px;border-radius:999px}
+  .b-ok{background:oklch(0.475 0.095 158 / .14);color:var(--primary)}
+  .b-bad{background:oklch(0.58 0.18 27 / .14);color:var(--destructive)}
+  .b-ref{background:oklch(0.75 0.185 45 / .14);color:var(--accent)}
+  .subnote{font-size:12px;color:var(--muted-fg);padding:2px 14px 12px}
+  /* trajectory bar */
+  .bar{height:34px;background:var(--muted);border:1px solid var(--border);border-radius:var(--radius);position:relative;overflow:hidden;margin:12px 0 6px}
+  .bar .fill{position:absolute;inset:0 auto 0 0;background:linear-gradient(90deg,var(--primary),var(--accent))}
+  .bar .tgt{position:absolute;top:-3px;bottom:-3px;right:0;width:2px;background:var(--accent)}
+  .barlbl{display:flex;justify-content:space-between;font-size:12px;color:var(--muted-fg);font-family:var(--mono)}
+  footer{border-top:1px solid var(--border);margin-top:40px;padding:22px 0}
+  footer .wrap{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;font-size:13px;color:var(--muted-fg)}
+  code{font-family:var(--mono);font-size:12px;background:var(--muted);padding:1px 5px;border-radius:5px}
+  a{color:var(--primary);text-decoration:none} a:hover{text-decoration:underline}
 </style>
 </head>
 <body>
-<div class="wrap">
-  <h1>ecdsa.fail · <span class="sound">SOUND</span></h1>
-  <p class="tag">Honest fault-tolerant resource cost of a reversible secp256k1 point-addition circuit — <b>ungameable validation.</b></p>
+<header><div class="wrap">
+  <div><span class="brand">ECDSA<span class="dot">.</span>fail</span><span class="pill">SOUND fork</span></div>
+  <nav class="navlinks"><a href="#how">How it works</a><a href="#frontier">Frontier</a><a href="#board">Leaderboard</a></nav>
+</div></header>
 
-  <div class="why">
-    The original ecdsa.fail grader seeds its 9024 test inputs from a Fiat-Shamir hash of <b>your own op stream</b>,
-    so a contestant can re-roll which inputs are tested for free (the "tail-nonce hunt") and pass a circuit that is
-    <b>wrong on reachable inputs</b>. This fork seeds test inputs from a <b>grader-controlled source independent of the
-    ops</b>, so only a genuinely-correct circuit validates (0 classical / 0 phase / 0 ancilla across many independent
-    seeds — the standard Google used a zero-knowledge proof for). The original board's sub-1300-qubit "circuits" fail here.
-    <b>Score = peak qubits × avg-executed Toffoli</b>, lower is better.
+<div class="wrap">
+  <div class="hero">
+    <h1>ECDSA<span class="dot">.</span>fail · SOUND</h1>
+    <p class="q">Can you break ECDSA? — <b>honestly.</b></p>
+    <p class="sub">A fork of <a href="https://www.ecdsa.fail/">ecdsa.fail</a> with an <b>ungameable</b> validator:
+      test inputs are seeded by the grader, not by your own op stream, so a circuit only scores if it is
+      <b>genuinely correct</b> (0 classical / 0 phase / 0 ancilla across independent seeds — the bar Google met with a zero-knowledge proof).
+      Same metric: <b>peak qubits × executed Toffoli</b>, lower is better.</p>
   </div>
 
-  <div id="descent"></div>
+  <section id="frontier"><h2>Frontier progress</h2>
+    <div class="grid cols3">
+      <div class="card"><div class="label">Best sound score</div><div class="big primary" id="best">—</div><div class="cap" id="bestc">qubit × Toffoli product</div></div>
+      <div class="card"><div class="label">Best peak qubits</div><div class="big accent" id="bestq">—</div><div class="cap">vs Google's correct 1175</div></div>
+      <div class="card"><div class="label">Honest cost vs gamed board</div><div class="big" id="gap">—</div><div class="cap">the original board's sub-1300q "circuits" fail here</div></div>
+    </div>
+    <div style="margin-top:20px">
+      <div class="barlbl"><span id="trajL">SOTA</span><span>Google 1175 (correct)</span></div>
+      <div class="bar"><div class="fill" id="trajFill"></div><div class="tgt"></div></div>
+      <div class="cap" id="trajCap"></div>
+    </div>
+  </section>
 
-  <h2>Leaderboard — correct circuits only</h2>
-  <table><thead><tr><th>#</th><th>Circuit</th><th class="num">Peak qubits</th><th class="num">avg Toffoli</th><th class="num">Score</th><th>Sound</th></tr></thead>
-  <tbody id="rows"></tbody></table>
+  <section id="how"><h2>How it works · why this fork</h2>
+    <div class="note">
+      The upstream grader seeds its 9024 test inputs from a Fiat-Shamir hash of <b>your own circuit's op stream</b>,
+      so contestants re-roll which inputs are tested for free (the "tail-nonce hunt") and pass a circuit that is
+      <b>wrong on reachable inputs</b> — that's why the headline sub-1300-qubit numbers are not correct circuits.
+      This fork's <code>sound_seed</code> draws test inputs from a <b>grader-controlled source independent of the ops</b>,
+      so nonce-hunting does nothing and only a genuinely-correct circuit passes. <b>Will you beat Google?</b> The target is
+      their correct 1175-qubit ZKP-validated point-add — and it has to be beaten <i>honestly</i>.
+    </div>
+  </section>
 
-  <h2>Rejected — not a correct circuit</h2>
-  <table><tbody id="invalid"></tbody></table>
-
-  <footer id="foot"></footer>
+  <section id="board"><h2>Leaderboard · correct circuits only</h2>
+    <table><thead><tr><th>#</th><th>Model / circuit</th><th class="n">Peak qubits</th><th class="n">avg Toffoli</th><th class="n">Score (q×T)</th><th>Validation</th></tr></thead>
+    <tbody id="rows"></tbody></table>
+    <div class="subnote" id="invnote"></div>
+  </section>
 </div>
+
+<footer><div class="wrap">
+  <span id="foot"></span>
+  <span>Sound fork of <a href="https://www.ecdsa.fail/">ECDSA.fail</a> · an Eigen Labs project · circuit lineage from Google (arXiv 2603.28846)</span>
+</div></footer>
+
 <script>
-const fmt = n => n==null ? "—" : n.toLocaleString("en-US");
+const fmt=n=>n==null?"—":n.toLocaleString("en-US");
 fetch("leaderboard.json").then(r=>r.json()).then(d=>{
-  const rows = document.getElementById("rows");
-  // reference (Google) rows first, then ranked entries
-  d.reference.forEach(e=>{
-    rows.insertAdjacentHTML("beforeend",
-      `<tr class="ref"><td class="rank">★</td><td class="name">${e.name}</td>
-       <td class="num q">${e.qubits}</td><td class="num">${fmt(e.toffoli)}</td>
-       <td class="num">${fmt(e.score)}</td><td><span class="badge ok">correct</span></td></tr>
-       <tr class="ref"><td></td><td colspan="5" class="note">${e.note}</td></tr>`);
-  });
-  d.entries.forEach(e=>{
-    rows.insertAdjacentHTML("beforeend",
-      `<tr class="${e.rank===1?'sota':''}"><td class="rank">${e.rank}</td><td class="name">${e.name}</td>
-       <td class="num q">${e.qubits}</td><td class="num">${fmt(e.toffoli)}</td>
-       <td class="num">${fmt(e.score)}</td><td><span class="badge ${e.sound?'ok':'no'}">${e.sound?'0/0/0':'fails'}</span></td></tr>
-       <tr><td></td><td colspan="5" class="note">${e.note}</td></tr>`);
-  });
-  const inv = document.getElementById("invalid");
-  d.invalid.forEach(e=>{
-    inv.insertAdjacentHTML("beforeend",
-      `<tr class="invalid"><td>✗</td><td class="name">${e.name}</td>
-       <td class="num q">${e.qubits}</td><td class="num">${fmt(e.toffoli)}</td>
-       <td class="num">${fmt(e.score)}</td><td><span class="badge no">INVALID</span></td></tr>
-       <tr class="invalid"><td></td><td colspan="5" class="note">${e.note}</td></tr>`);
-  });
-  // descent progress bar: 1175 (target) .. baseline 2292, marker at current SOTA
-  const sota = d.entries[0].qubits, base = 2292, target = 1175;
-  const pct = Math.max(0, Math.min(100, (base - sota)/(base - target)*100));
-  document.getElementById("descent").innerHTML =
-    `<h2>Descent toward Google's correct 1175q</h2>
-     <div class="barlbl"><span>SOTA ${sota}q</span><span>target ${target}q</span></div>
-     <div class="bar"><div class="fill" style="width:${pct.toFixed(1)}%"></div><div class="target" style="left:100%"></div></div>
-     <div class="note">${(base-sota)} qubits below the naive baseline; ${(sota-target)} to go to match Google's correct circuit.</div>`;
-  document.getElementById("foot").innerHTML =
-    `Updated ${d.updated} · validation: <code>eval_circuit</code> with grader-controlled <code>sound_seed</code> · fork of ecdsa.fail (Eigen Labs / gpsanant), circuit lineage adapted from Google.`;
+  const sota=d.entries[0], base=2292, tgt=1175;
+  document.getElementById("best").textContent=fmt(sota.score);
+  document.getElementById("bestc").textContent=`${sota.qubits} q × ${fmt(sota.toffoli)} T`;
+  document.getElementById("bestq").textContent=sota.qubits;
+  document.getElementById("gap").textContent=`${(sota.qubits/tgt).toFixed(2)}×`;
+  const pct=Math.max(0,Math.min(100,(base-sota.qubits)/(base-tgt)*100));
+  document.getElementById("trajL").textContent=`SOTA ${sota.qubits}q`;
+  document.getElementById("trajFill").style.width=pct.toFixed(1)+"%";
+  document.getElementById("trajCap").textContent=`${base-sota.qubits} qubits below the naive correct baseline; ${sota.qubits-tgt} to go to match Google's correct circuit.`;
+  const rows=document.getElementById("rows");
+  d.reference.forEach(e=>rows.insertAdjacentHTML("beforeend",
+    `<tr class="ref"><td class="rk">★</td><td class="model">${e.name}</td><td class="n">${e.qubits}</td><td class="n">${fmt(e.toffoli)}</td><td class="n">${fmt(e.score)}</td><td><span class="badge b-ref">reference</span></td></tr>`));
+  d.entries.forEach(e=>rows.insertAdjacentHTML("beforeend",
+    `<tr class="${e.rank===1?'best':''}"><td class="rk">${e.rank}</td><td class="model">${e.name}</td><td class="n">${e.qubits}</td><td class="n">${fmt(e.toffoli)}</td><td class="n">${fmt(e.score)}</td><td><span class="badge ${e.sound?'b-ok':'b-bad'}">${e.sound?'0/0/0 sound':'fails'}</span></td></tr>`));
+  d.invalid.forEach(e=>rows.insertAdjacentHTML("beforeend",
+    `<tr class="bad"><td>✗</td><td class="model">${e.name}</td><td class="n">${e.qubits}</td><td class="n">${fmt(e.toffoli)}</td><td class="n">${fmt(e.score)}</td><td><span class="badge b-bad">INVALID</span></td></tr>`));
+  document.getElementById("invnote").textContent=d.invalid.length?`✗ ${d.invalid[0].note}`:"";
+  document.getElementById("foot").textContent=`Updated ${d.updated} · validated by eval_circuit + grader-controlled sound_seed`;
 }).catch(e=>{document.getElementById("rows").innerHTML=`<tr><td colspan="6">failed to load leaderboard.json: ${e}</td></tr>`;});
 </script>
 </body>
