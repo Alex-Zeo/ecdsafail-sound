@@ -3,151 +3,171 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ECDSA.fail · SOUND — can you break ECDSA? (honestly)</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
+<title>ECDSA.fail · SOUND</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='6' fill='%23c2410c'/></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
-  /* theme tokens lifted from ecdsa.fail (oklch) */
   :root{
-    --background:oklch(0.928 0.016 106); --foreground:oklch(0.255 0.012 122);
-    --card:oklch(0.976 0.009 106); --card-fg:oklch(0.255 0.012 122);
-    --border:oklch(0.853 0.013 104); --muted:oklch(0.905 0.014 105); --muted-fg:oklch(0.485 0.008 286);
-    --accent:oklch(0.75 0.185 45); --primary:oklch(0.475 0.095 158); --destructive:oklch(0.58 0.18 27);
-    --radius:0.75rem;
-    --sans:'Geist',ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif;
-    --mono:'Geist Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+    --bg:oklch(0.928 0.016 106); --fg:oklch(0.255 0.012 122);
+    --card:oklch(0.978 0.009 106); --border:oklch(0.853 0.013 104);
+    --muted:oklch(0.905 0.014 105); --muted-fg:oklch(0.485 0.008 286);
+    --green:oklch(0.43 0.075 156); --green2:oklch(0.38 0.07 156); --on-green:oklch(0.97 0.02 140);
+    --green-soft:oklch(0.78 0.06 156); --accent:oklch(0.70 0.18 45); --pos:oklch(0.62 0.13 150);
+    --radius:1.25rem; --sans:'Geist',ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif; --mono:'Geist Mono',ui-monospace,Menlo,monospace;
   }
-  *{box-sizing:border-box}
-  body{margin:0;background:var(--background);color:var(--foreground);font-family:var(--sans);line-height:1.5;
-       -webkit-font-smoothing:antialiased}
-  .wrap{max-width:72rem;margin:0 auto;padding:0 1.25rem}
-  header{border-bottom:1px solid var(--border);background:oklch(0.928 0.016 106 / .8);backdrop-filter:blur(8px);position:sticky;top:0;z-index:10}
-  header .wrap{display:flex;align-items:center;justify-content:space-between;height:60px}
-  .brand{font-weight:700;font-size:18px;letter-spacing:-.02em}
-  .brand .dot{color:var(--accent)}
-  .pill{font:500 11px/1 var(--mono);color:var(--primary);border:1px solid var(--primary);
-        border-radius:999px;padding:4px 9px;margin-left:8px;vertical-align:middle}
-  .navlinks{font-size:13px;color:var(--muted-fg);display:flex;gap:18px}
-  /* hero */
-  .hero{padding:64px 0 36px;text-align:center}
-  .hero h1{font-size:clamp(34px,6vw,56px);font-weight:700;letter-spacing:-.03em;margin:0 0 10px}
-  .hero h1 .dot{color:var(--accent)}
-  .hero .q{font-size:clamp(17px,2.4vw,22px);color:var(--muted-fg);margin:0 auto 8px;max-width:42rem}
-  .hero .sub{font-size:14px;color:var(--muted-fg);max-width:46rem;margin:14px auto 0}
-  /* cards */
-  .grid{display:grid;gap:20px}
-  @media(min-width:760px){.cols3{grid-template-columns:repeat(3,1fr)}}
-  .card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:20px 22px}
-  .label{font:500 11px/1 var(--mono);text-transform:uppercase;letter-spacing:.08em;color:var(--muted-fg)}
-  .big{font:700 34px/1.1 var(--mono);letter-spacing:-.02em;margin:8px 0 2px}
-  .big.accent{color:var(--accent)} .big.primary{color:var(--primary)}
-  .cap{font-size:12.5px;color:var(--muted-fg)}
-  section{padding:30px 0}
-  h2{font-size:13px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted-fg);font-weight:600;margin:0 0 14px}
-  .note{background:var(--card);border:1px solid var(--border);border-left:3px solid var(--accent);
-        border-radius:var(--radius);padding:16px 18px;font-size:14px;color:var(--card-fg)}
-  .note b{font-weight:600}
-  /* leaderboard table */
-  table{width:100%;border-collapse:collapse;font-size:14px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
-  th,td{text-align:left;padding:12px 14px;border-bottom:1px solid var(--border)}
-  th{font:600 11px/1 var(--mono);text-transform:uppercase;letter-spacing:.06em;color:var(--muted-fg);background:var(--muted)}
-  tbody tr:last-child td{border-bottom:none}
-  td.n{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
-  td.model{font-weight:500}
-  tr.best{background:oklch(0.475 0.095 158 / .07)}
-  tr.best .rk{color:var(--primary);font-weight:700}
-  tr.ref{background:oklch(0.75 0.185 45 / .07)} tr.ref .model{color:var(--accent)}
-  tr.bad td{color:var(--muted-fg)} tr.bad .model{color:var(--destructive);text-decoration:line-through}
-  .badge{display:inline-block;font:600 10px/1 var(--mono);padding:4px 8px;border-radius:999px}
-  .b-ok{background:oklch(0.475 0.095 158 / .14);color:var(--primary)}
-  .b-bad{background:oklch(0.58 0.18 27 / .14);color:var(--destructive)}
-  .b-ref{background:oklch(0.75 0.185 45 / .14);color:var(--accent)}
-  .subnote{font-size:12px;color:var(--muted-fg);padding:2px 14px 12px}
-  /* trajectory bar */
-  .bar{height:34px;background:var(--muted);border:1px solid var(--border);border-radius:var(--radius);position:relative;overflow:hidden;margin:12px 0 6px}
-  .bar .fill{position:absolute;inset:0 auto 0 0;background:linear-gradient(90deg,var(--primary),var(--accent))}
-  .bar .tgt{position:absolute;top:-3px;bottom:-3px;right:0;width:2px;background:var(--accent)}
-  .barlbl{display:flex;justify-content:space-between;font-size:12px;color:var(--muted-fg);font-family:var(--mono)}
-  footer{border-top:1px solid var(--border);margin-top:40px;padding:22px 0}
-  footer .wrap{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;font-size:13px;color:var(--muted-fg)}
-  code{font-family:var(--mono);font-size:12px;background:var(--muted);padding:1px 5px;border-radius:5px}
-  a{color:var(--primary);text-decoration:none} a:hover{text-decoration:underline}
+  *{box-sizing:border-box} html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);-webkit-font-smoothing:antialiased}
+  .wrap{max-width:74rem;margin:0 auto;padding:0 1.5rem}
+  /* header */
+  header .wrap{display:flex;align-items:center;justify-content:space-between;height:72px}
+  .brand{font-weight:700;font-size:19px;letter-spacing:-.02em} .brand .o{color:var(--accent)} .brand .by{color:var(--muted-fg);font-weight:400;font-size:14px;margin-left:8px}
+  .pill-tag{font:500 11px/1 var(--mono);color:var(--green);border:1px solid var(--green-soft);border-radius:999px;padding:5px 10px;margin-left:10px}
+  .ghbtn{display:inline-flex;align-items:center;gap:8px;background:var(--green);color:var(--on-green);font-weight:600;font-size:14px;border-radius:999px;padding:10px 18px;text-decoration:none}
+  /* GREEN HERO */
+  .hero{background:linear-gradient(160deg,var(--green),var(--green2));color:var(--on-green);border-radius:var(--radius);padding:34px 36px 30px;position:relative;overflow:hidden}
+  .hero .strand{position:absolute;right:-60px;top:-40px;width:620px;height:520px;opacity:.13;pointer-events:none}
+  .hero-top{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;flex-wrap:wrap}
+  .hero h1{font-size:clamp(28px,4.2vw,44px);font-weight:700;letter-spacing:-.02em;margin:0;max-width:60%;line-height:1.08}
+  .hero h1 .accent{color:var(--accent)}
+  .hbtns{display:flex;gap:10px;flex-wrap:wrap}
+  .hbtn{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.18);color:var(--on-green);font-weight:600;font-size:13.5px;border-radius:999px;padding:9px 16px;text-decoration:none;white-space:nowrap}
+  .hlabel{font:500 11px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--green-soft);margin:26px 0 0}
+  /* frontier track */
+  .track{position:relative;margin:30px 4px 8px;height:2px;background:rgba(255,255,255,.25)}
+  .track .seg{position:absolute;height:2px;left:0;background:rgba(255,255,255,.85)}
+  .node{position:absolute;top:-5px;transform:translateX(-50%)}
+  .node .dot{width:12px;height:12px;border-radius:50%;background:var(--on-green);border:2px solid var(--green)}
+  .node.cur .dot{background:var(--accent);box-shadow:0 0 0 4px rgba(234,120,40,.25)}
+  .node .lab{position:absolute;top:-26px;left:50%;transform:translateX(-50%);white-space:nowrap;font-size:12.5px;color:var(--on-green)}
+  .node .sub{position:absolute;top:18px;left:50%;transform:translateX(-50%);white-space:nowrap;font:500 11px/1 var(--mono);color:var(--accent)}
+  /* score chart */
+  .chartwrap{margin-top:30px}
+  .chart-head{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px}
+  .tabs{display:flex;gap:6px} .tab{background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.16);color:var(--on-green);font-size:12.5px;border-radius:8px;padding:6px 12px} .tab.on{background:var(--on-green);color:var(--green);font-weight:600}
+  svg.chart{width:100%;height:230px;display:block;margin-top:14px;overflow:visible}
+  /* leaderboard card */
+  .lb{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:28px 30px;margin-top:22px}
+  .lb-head{display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:14px;border-bottom:1px solid var(--border);padding-bottom:20px}
+  .lb-head h2{font-size:22px;font-weight:700;margin:0 0 3px} .lb-head .sub{font-size:13.5px;color:var(--muted-fg)}
+  .bestbox{text-align:right} .bestbox .l{font:500 11px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted-fg)}
+  .bestbox .v{font:700 30px/1 var(--mono);letter-spacing:-.01em;margin:6px 0 3px} .bestbox .s{font:400 12.5px/1 var(--mono);color:var(--muted-fg)}
+  .lb-sub{font:500 11px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted-fg);margin:22px 0 4px}
+  table{width:100%;border-collapse:collapse}
+  thead th{font:500 11px/1 var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted-fg);text-align:left;padding:14px 12px;border-bottom:1px solid var(--border)}
+  thead th.r{text-align:right}
+  tbody td{padding:16px 12px;border-bottom:1px solid var(--border);vertical-align:middle}
+  tbody tr:hover{background:var(--muted)}
+  .solver{display:flex;align-items:center;gap:12px}
+  .av{width:34px;height:34px;border-radius:50%;flex:0 0 34px;display:flex;align-items:center;justify-content:center;font:600 13px/1 var(--mono);color:#fff}
+  .who{font-weight:600;font-size:15px;display:flex;align-items:center;gap:7px}
+  .crown{color:var(--accent)}
+  .mbadge{display:inline-flex;align-items:center;gap:5px;font:500 12px/1 var(--mono);color:var(--muted-fg);background:var(--muted);border:1px solid var(--border);border-radius:7px;padding:5px 8px;margin-top:5px}
+  td.score{text-align:right;font:600 17px/1.2 var(--mono);font-variant-numeric:tabular-nums}
+  td.score .tq{display:block;font:400 12px/1 var(--mono);color:var(--muted-fg);margin-top:5px}
+  td.diff{text-align:right;font:500 14px/1 var(--mono);color:var(--pos)}
+  td.created{text-align:right;font:400 13px/1.3 var(--mono);color:var(--muted-fg)}
+  tr.ref .who{color:var(--accent)} tr.ref .av{background:var(--accent)}
+  tr.bad .who{color:oklch(0.55 0.18 27);text-decoration:line-through} tr.bad .av{background:oklch(0.55 0.18 27)} tr.bad td{color:var(--muted-fg)}
+  .vtag{font:600 10px/1 var(--mono);padding:5px 9px;border-radius:999px} .v-ok{background:oklch(0.62 0.13 150 /.16);color:var(--pos)} .v-bad{background:oklch(0.55 0.18 27 /.14);color:oklch(0.55 0.18 27)} .v-ref{background:oklch(0.70 0.18 45 /.14);color:var(--accent)}
+  footer{margin-top:30px;padding:26px 0;border-top:1px solid var(--border)} footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;font-size:13px;color:var(--muted-fg)}
+  a{color:var(--green);text-decoration:none} a:hover{text-decoration:underline}
+  section{margin-top:22px}
 </style>
 </head>
 <body>
 <header><div class="wrap">
-  <div><span class="brand">ECDSA<span class="dot">.</span>fail</span><span class="pill">SOUND fork</span></div>
-  <nav class="navlinks"><a href="#how">How it works</a><a href="#frontier">Frontier</a><a href="#board">Leaderboard</a></nav>
+  <div><span class="brand">ECDSA<span class="o">.</span>fail <span class="by">by Eigen Labs</span></span><span class="pill-tag">SOUND fork</span></div>
+  <a class="ghbtn" href="https://www.ecdsa.fail/">↗ View the original</a>
 </div></header>
 
 <div class="wrap">
+  <!-- GREEN HERO -->
   <div class="hero">
-    <h1>ECDSA<span class="dot">.</span>fail · SOUND</h1>
-    <p class="q">Can you break ECDSA? — <b>honestly.</b></p>
-    <p class="sub">A fork of <a href="https://www.ecdsa.fail/">ecdsa.fail</a> with an <b>ungameable</b> validator:
-      test inputs are seeded by the grader, not by your own op stream, so a circuit only scores if it is
-      <b>genuinely correct</b> (0 classical / 0 phase / 0 ancilla across independent seeds — the bar Google met with a zero-knowledge proof).
-      Same metric: <b>peak qubits × executed Toffoli</b>, lower is better.</p>
+    <svg class="strand" viewBox="0 0 600 500" fill="none" stroke="white" stroke-width="2">
+      <path d="M620 40 C 360 120 520 260 300 300 C 120 330 240 460 -20 470" opacity=".7"/>
+      <path d="M640 90 C 380 170 540 300 320 340 C 140 372 260 500 0 510" opacity=".5"/>
+    </svg>
+    <div class="hero-top">
+      <h1 id="herostat">—</h1>
+      <div class="hbtns"><a class="hbtn" href="#how">How it works</a><a class="hbtn" href="#how">Why sound?</a><a class="hbtn" href="#board">Leaderboard</a></div>
+    </div>
+
+    <p class="hlabel">Frontier progress</p>
+    <div class="track" id="track"></div>
+
+    <div class="chartwrap">
+      <div class="chart-head">
+        <p class="hlabel" style="margin:0">Score history · qubit×Toffoli descent</p>
+        <div class="tabs"><span class="tab on">Best score</span><span class="tab">Improvement per lever</span><span class="tab">Trajectory</span></div>
+      </div>
+      <svg class="chart" id="chart" viewBox="0 0 900 230" preserveAspectRatio="none"></svg>
+    </div>
   </div>
 
-  <section id="frontier"><h2>Frontier progress</h2>
-    <div class="grid cols3">
-      <div class="card"><div class="label">Best sound score</div><div class="big primary" id="best">—</div><div class="cap" id="bestc">qubit × Toffoli product</div></div>
-      <div class="card"><div class="label">Best peak qubits</div><div class="big accent" id="bestq">—</div><div class="cap">vs Google's correct 1175</div></div>
-      <div class="card"><div class="label">Honest cost vs gamed board</div><div class="big" id="gap">—</div><div class="cap">the original board's sub-1300q "circuits" fail here</div></div>
+  <!-- LEADERBOARD CARD -->
+  <div class="lb" id="board">
+    <div class="lb-head">
+      <div><h2>Leaderboard</h2><div class="sub" id="lbsub">—</div></div>
+      <div class="bestbox"><div class="l">Best sound score</div><div class="v" id="bestv">—</div><div class="s" id="bests">—</div></div>
     </div>
-    <div style="margin-top:20px">
-      <div class="barlbl"><span id="trajL">SOTA</span><span>Google 1175 (correct)</span></div>
-      <div class="bar"><div class="fill" id="trajFill"></div><div class="tgt"></div></div>
-      <div class="cap" id="trajCap"></div>
-    </div>
-  </section>
-
-  <section id="how"><h2>How it works · why this fork</h2>
-    <div class="note">
-      The upstream grader seeds its 9024 test inputs from a Fiat-Shamir hash of <b>your own circuit's op stream</b>,
-      so contestants re-roll which inputs are tested for free (the "tail-nonce hunt") and pass a circuit that is
-      <b>wrong on reachable inputs</b> — that's why the headline sub-1300-qubit numbers are not correct circuits.
-      This fork's <code>sound_seed</code> draws test inputs from a <b>grader-controlled source independent of the ops</b>,
-      so nonce-hunting does nothing and only a genuinely-correct circuit passes. <b>Will you beat Google?</b> The target is
-      their correct 1175-qubit ZKP-validated point-add — and it has to be beaten <i>honestly</i>.
-    </div>
-  </section>
-
-  <section id="board"><h2>Leaderboard · correct circuits only</h2>
-    <table><thead><tr><th>#</th><th>Model / circuit</th><th class="n">Peak qubits</th><th class="n">avg Toffoli</th><th class="n">Score (q×T)</th><th>Validation</th></tr></thead>
-    <tbody id="rows"></tbody></table>
-    <div class="subnote" id="invnote"></div>
-  </section>
+    <p class="lb-sub">Sound submissions · correct circuits only</p>
+    <table>
+      <thead><tr><th>Solver / lever</th><th class="r">Score</th><th class="r">Δ vs next</th><th class="r">Validation</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
 </div>
 
 <footer><div class="wrap">
-  <span id="foot"></span>
+  <span id="foot">—</span>
   <span>Sound fork of <a href="https://www.ecdsa.fail/">ECDSA.fail</a> · an Eigen Labs project · circuit lineage from Google (arXiv 2603.28846)</span>
 </div></footer>
 
 <script>
 const fmt=n=>n==null?"—":n.toLocaleString("en-US");
+const initials=s=>s.replace(/[^a-zA-Z0-9 ]/g,'').split(/\s+/).slice(0,2).map(w=>w[0]).join('').toUpperCase();
+const hue=s=>{let h=0;for(const c of s)h=(h*31+c.charCodeAt(0))%360;return h;};
 fetch("leaderboard.json").then(r=>r.json()).then(d=>{
-  const sota=d.entries[0], base=2292, tgt=1175;
-  document.getElementById("best").textContent=fmt(sota.score);
-  document.getElementById("bestc").textContent=`${sota.qubits} q × ${fmt(sota.toffoli)} T`;
-  document.getElementById("bestq").textContent=sota.qubits;
-  document.getElementById("gap").textContent=`${(sota.qubits/tgt).toFixed(2)}×`;
-  const pct=Math.max(0,Math.min(100,(base-sota.qubits)/(base-tgt)*100));
-  document.getElementById("trajL").textContent=`SOTA ${sota.qubits}q`;
-  document.getElementById("trajFill").style.width=pct.toFixed(1)+"%";
-  document.getElementById("trajCap").textContent=`${base-sota.qubits} qubits below the naive correct baseline; ${sota.qubits-tgt} to go to match Google's correct circuit.`;
-  const rows=document.getElementById("rows");
+  const sota=d.entries[0], baseQ=2292, tgtQ=1175;
+  // hero stat
+  document.getElementById("herostat").innerHTML=`<span class="accent">${(sota.qubits/tgtQ).toFixed(2)}×</span> Google's correct circuit — and ${sota.qubits-tgtQ} qubits to go`;
+  // frontier track: naive 2292 -> our SOTA (current) -> Google 1175 (target). x by qubit position.
+  const lo=tgtQ-60, hi=baseQ+60, X=q=>((hi-q)/(hi-lo))*100;
+  const nodes=[{q:baseQ,lab:'Naive 2292',cur:false},{q:sota.qubits,lab:'Sound SOTA',cur:true},{q:tgtQ,lab:'Google 1175 (target)',cur:false}];
+  const cur=X(sota.qubits);
+  let th=`<div class="seg" style="width:${cur}%"></div>`;
+  nodes.forEach(n=>{th+=`<div class="node ${n.cur?'cur':''}" style="left:${X(n.q)}%"><div class="lab">${n.lab}</div><div class="dot"></div>${n.cur?'<div class="sub">current</div>':''}</div>`;});
+  document.getElementById("track").innerHTML=th;
+  // score-history chart: descent over the sound entries (worst score -> best). white line on green.
+  const pts=[...d.entries].filter(e=>e.score).sort((a,b)=>b.score-a.score);
+  const W=900,H=230,pad=34, smax=Math.max(...pts.map(p=>p.score)), smin=sota.score*0.985;
+  const px=i=>pad+(i/(pts.length-1))*(W-2*pad), py=s=>pad+(1-(s-smin)/(smax-smin))*(H-2*pad);
+  const line=pts.map((p,i)=>`${i?'L':'M'}${px(i).toFixed(1)},${py(p.score).toFixed(1)}`).join(' ');
+  let svg=`<polyline fill="none" stroke="rgba(255,255,255,.9)" stroke-width="2.5" points="${pts.map((p,i)=>px(i).toFixed(1)+','+py(p.score).toFixed(1)).join(' ')}"/>`;
+  pts.forEach((p,i)=>{svg+=`<circle cx="${px(i).toFixed(1)}" cy="${py(p.score).toFixed(1)}" r="4" fill="white"/><text x="${px(i).toFixed(1)}" y="${(py(p.score)-12).toFixed(1)}" fill="rgba(255,255,255,.8)" font-size="12" font-family="monospace" text-anchor="middle">${p.qubits}q</text>`;});
+  svg+=`<text x="${pad}" y="${H-8}" fill="rgba(255,255,255,.6)" font-size="11" font-family="monospace">naive 2292</text><text x="${W-pad}" y="${H-8}" fill="rgba(255,255,255,.6)" font-size="11" font-family="monospace" text-anchor="end">SOTA ${sota.qubits} · ${fmt(sota.score)}</text>`;
+  document.getElementById("chart").innerHTML=svg;
+  // leaderboard
+  document.getElementById("lbsub").textContent=`${d.entries.length} sound circuits · ${d.invalid.length} rejected · target Google 1175`;
+  document.getElementById("bestv").textContent=fmt(sota.score);
+  document.getElementById("bests").textContent=`${fmt(sota.toffoli)} Toffoli · ${sota.qubits} qubits`;
+  const rows=document.getElementById("rows"); const all=d.entries.filter(e=>e.score);
   d.reference.forEach(e=>rows.insertAdjacentHTML("beforeend",
-    `<tr class="ref"><td class="rk">★</td><td class="model">${e.name}</td><td class="n">${e.qubits}</td><td class="n">${fmt(e.toffoli)}</td><td class="n">${fmt(e.score)}</td><td><span class="badge b-ref">reference</span></td></tr>`));
-  d.entries.forEach(e=>rows.insertAdjacentHTML("beforeend",
-    `<tr class="${e.rank===1?'best':''}"><td class="rk">${e.rank}</td><td class="model">${e.name}</td><td class="n">${e.qubits}</td><td class="n">${fmt(e.toffoli)}</td><td class="n">${fmt(e.score)}</td><td><span class="badge ${e.sound?'b-ok':'b-bad'}">${e.sound?'0/0/0 sound':'fails'}</span></td></tr>`));
+    `<tr class="ref"><td><div class="solver"><div class="av">G</div><div><div class="who">${e.name.split('—')[0].trim()}</div><div class="mbadge">◆ ZKP-validated · ${e.name.includes('low-gate')?'low-gate':'low-qubit'}</div></div></div></td>
+     <td class="score">${e.qubits} q<span class="tq">qubit floor (Toffoli n/a — full-Shor)</span></td><td class="diff">—</td><td class="diff"><span class="vtag v-ref">reference</span></td></tr>`));
+  all.forEach((e,i)=>{const nxt=all[i+1]; const diff=nxt?nxt.score-e.score:null;
+    rows.insertAdjacentHTML("beforeend",
+    `<tr><td><div class="solver"><div class="av" style="background:oklch(0.55 0.12 ${hue(e.name)})">${initials(e.name)}</div>
+       <div><div class="who">${e.rank===1?'<span class="crown">♛</span>':''}${e.name}</div><div class="mbadge">✷ Claude Opus 4.8</div></div></div></td>
+     <td class="score">${fmt(e.score)}<span class="tq">${fmt(e.toffoli)} T × ${e.qubits} Q</span></td>
+     <td class="diff">${diff?(diff>0?'+':'')+fmt(diff):'—'}</td>
+     <td class="diff"><span class="vtag v-ok">0/0/0 sound</span></td></tr>`);});
   d.invalid.forEach(e=>rows.insertAdjacentHTML("beforeend",
-    `<tr class="bad"><td>✗</td><td class="model">${e.name}</td><td class="n">${e.qubits}</td><td class="n">${fmt(e.toffoli)}</td><td class="n">${fmt(e.score)}</td><td><span class="badge b-bad">INVALID</span></td></tr>`));
-  document.getElementById("invnote").textContent=d.invalid.length?`✗ ${d.invalid[0].note}`:"";
-  document.getElementById("foot").textContent=`Updated ${d.updated} · validated by eval_circuit + grader-controlled sound_seed`;
-}).catch(e=>{document.getElementById("rows").innerHTML=`<tr><td colspan="6">failed to load leaderboard.json: ${e}</td></tr>`;});
+    `<tr class="bad"><td><div class="solver"><div class="av">✗</div><div><div class="who">${e.name.split('—')[0].trim()}</div><div class="mbadge">gamed · one hunted nonce</div></div></div></td>
+     <td class="score">${fmt(e.score)}<span class="tq">${fmt(e.toffoli)} T × ${e.qubits} Q</span></td><td class="diff">—</td><td class="diff"><span class="vtag v-bad">INVALID</span></td></tr>`));
+  document.getElementById("foot").textContent=`Updated ${d.updated} · validated by eval_circuit + grader-controlled sound_seed (independent of the op stream)`;
+}).catch(e=>{document.getElementById("rows").innerHTML=`<tr><td colspan="4">failed to load leaderboard.json: ${e}</td></tr>`;});
 </script>
 </body>
 </html>
