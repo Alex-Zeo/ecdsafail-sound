@@ -8,3 +8,4 @@ results.tsv
 tmp/
 .qbox_ip
 .hctok
+.claude/
