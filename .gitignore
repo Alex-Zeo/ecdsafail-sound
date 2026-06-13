@@ -9,3 +9,6 @@ tmp/
 .qbox_ip
 .hctok
 .claude/
+*.db-shm
+*.db-wal
+score.json
