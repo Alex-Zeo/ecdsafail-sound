@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS experiments(
   claimed_at TEXT, done_at TEXT, UNIQUE(config_id, kind));
 CREATE TABLE IF NOT EXISTS worker_status(worker TEXT PRIMARY KEY, status TEXT, current_experiment_id INTEGER, last_heartbeat TEXT, n_done INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS experiment_log(id INTEGER PRIMARY KEY AUTOINCREMENT, experiment_id INTEGER, ts TEXT, event TEXT, message TEXT);
+CREATE TABLE IF NOT EXISTS control(id INTEGER PRIMARY KEY CHECK(id=1), run INTEGER DEFAULT 1);
 """
 
 def conn():
@@ -93,13 +94,16 @@ def claim(c):
     cur.execute("UPDATE experiments SET status='running',claimed_at=? WHERE id=?", (NOW(), row[0])); cur.execute("COMMIT")
     return row
 
-def worker(name):
+def worker(name, daemon):
     c = conn(); c.execute("INSERT OR REPLACE INTO worker_status(worker,status,last_heartbeat,n_done) VALUES(?,?,?,COALESCE((SELECT n_done FROM worker_status WHERE worker=?),0))", (name, "idle", NOW(), name)); c.commit()
     while True:
+        try:
+            if c.execute("SELECT run FROM control WHERE id=1").fetchone()[0] == 0: break
+        except Exception: pass
         row = claim(c)
         if not row:
             c.execute("UPDATE worker_status SET status='idle',last_heartbeat=? WHERE worker=?", (NOW(), name)); c.commit(); time.sleep(6)
-            if c.execute("SELECT COUNT(*) FROM experiments WHERE status='pending'").fetchone()[0] == 0: break
+            if not daemon and c.execute("SELECT COUNT(*) FROM experiments WHERE status='pending'").fetchone()[0] == 0: break
             continue
         eid, cid, knobs, kind = row
         c.execute("UPDATE worker_status SET status='busy',current_experiment_id=?,last_heartbeat=? WHERE worker=?", (eid, NOW(), name)); c.commit()
@@ -124,7 +128,7 @@ def worker(name):
     print("[%s] drained" % name)
 
 def do_init():
-    c = conn(); c.executescript(SCHEMA); c.commit(); print("init", DB)
+    c = conn(); c.executescript(SCHEMA); c.execute("INSERT OR IGNORE INTO control(id,run) VALUES(1,1)"); c.commit(); print("init", DB)
 def do_seed(path):
     c = conn(); n = 0
     for x in json.load(open(path)):
@@ -133,10 +137,21 @@ def do_seed(path):
                       (x.get("config_id"), x["knobs"], x.get("kind", "peak"), x.get("priority", 5), x.get("persona", x.get("source", "")), x.get("why", ""))); n += 1
         except Exception as ex: print("skip", x.get("config_id"), ex)
     c.commit(); print("seeded %d; pending=%d" % (n, c.execute("SELECT COUNT(*) FROM experiments WHERE status=?", ("pending",)).fetchone()[0]))
-def do_run(nw):
-    ts = [threading.Thread(target=worker, args=("w%d" % i,), daemon=True) for i in range(nw)]
+def do_run(nw, daemon=False):
+    c = conn(); c.execute("INSERT OR IGNORE INTO control(id,run) VALUES(1,1)"); c.execute("UPDATE control SET run=1 WHERE id=1")
+    n = c.execute("UPDATE experiments SET status='pending',worker=NULL WHERE status='running'").rowcount; c.commit()
+    if n: print("requeued %d orphaned running experiments" % n)
+    print(("daemon" if daemon else "batch") + " run, workers=%d" % nw)
+    ts = [threading.Thread(target=worker, args=("w%d" % i, daemon), daemon=True) for i in range(nw)]
     for t in ts: t.start()
     for t in ts: t.join()
+    print("runner exited")
+def do_stop():
+    c = conn(); c.execute("INSERT OR IGNORE INTO control(id,run) VALUES(1,1)"); c.execute("UPDATE control SET run=0 WHERE id=1"); c.commit(); print("stop signaled (workers exit after current experiment)")
+def do_cancel(filt):
+    c = conn(); f = "%" + filt + "%"
+    n = c.execute("UPDATE experiments SET status='cancelled' WHERE status='pending' AND (config_id LIKE ? OR persona LIKE ? OR knobs LIKE ?)", (f, f, f)).rowcount
+    c.commit(); print("cancelled %d pending experiments matching %r" % (n, filt))
 def do_status():
     c = conn(); print("QUEUE:", dict(c.execute("SELECT status,COUNT(*) FROM experiments GROUP BY status").fetchall()))
     for w, st, eid, hb, n in c.execute("SELECT worker,status,current_experiment_id,last_heartbeat,n_done FROM worker_status ORDER BY worker"):
@@ -150,10 +165,12 @@ def do_status():
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--init", action="store_true"); ap.add_argument("--seed"); ap.add_argument("--run", action="store_true"); ap.add_argument("--workers", type=int, default=7); ap.add_argument("--status", action="store_true")
+    ap.add_argument("--init", action="store_true"); ap.add_argument("--seed"); ap.add_argument("--run", action="store_true"); ap.add_argument("--workers", type=int, default=7); ap.add_argument("--status", action="store_true"); ap.add_argument("--daemon", action="store_true"); ap.add_argument("--stop", action="store_true"); ap.add_argument("--cancel")
     a = ap.parse_args()
     if a.init: do_init()
     elif a.seed: do_seed(a.seed)
-    elif a.run: do_run(a.workers)
+    elif a.stop: do_stop()
+    elif a.cancel: do_cancel(a.cancel)
+    elif a.run: do_run(a.workers, a.daemon)
     elif a.status: do_status()
     else: ap.print_help()

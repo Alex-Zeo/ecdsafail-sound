@@ -1,0 +1,13 @@
+[Unit]
+Description=quantum descent SSOT runner (sound secp256k1 point-add)
+After=network.target
+[Service]
+Type=simple
+WorkingDirectory=/workspace/quantum
+ExecStart=/usr/bin/python3 /workspace/quantum/quantum_runner.py --run --daemon --workers 7
+Restart=always
+RestartSec=5
+StandardOutput=append:/workspace/quantum/runner.log
+StandardError=append:/workspace/quantum/runner.log
+[Install]
+WantedBy=multi-user.target

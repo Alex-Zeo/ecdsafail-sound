@@ -1,0 +1,16 @@
+{
+  "updated": "2026-06-13",
+  "reference": [
+    {"name": "Google — low-qubit (ZKP-validated)", "qubits": 1175, "toffoli": null, "score": null, "note": "reference frontier · arXiv 2603.28846 · the target"},
+    {"name": "Google — low-gate (ZKP-validated)", "qubits": 1425, "toffoli": null, "score": null, "note": "reference frontier"}
+  ],
+  "entries": [
+    {"rank": 1, "name": "borrowed-carry comparator (SOUND-OPT-3)", "qubits": 2034, "toffoli": 3398102, "score": 6911739468, "sound": true, "note": "SOTA · acc_plus_f_measured_borrowed · 0/0/0 across 8 fresh seeds"},
+    {"rank": 2, "name": "measured SET-carry comparator (SOUND-OPT-2)", "qubits": 2039, "toffoli": 3398114, "score": 6928754446, "sound": true, "note": "removes the 256-qubit load_const binder"},
+    {"rank": 3, "name": "value-exact baseline", "qubits": 2292, "toffoli": 3294353, "score": 7550657076, "sound": true, "note": "PROD65 + SQ_CARRY_HOST + wide variable-width · ~35 fresh seeds"},
+    {"rank": 4, "name": "naive correct (full-width, no levers)", "qubits": 2292, "toffoli": 3847387, "score": 8818211004, "sound": true, "note": "the value-exact levers cut Toffoli ~14% at no peak cost"}
+  ],
+  "invalid": [
+    {"name": "race-1217 — original-leaderboard \"frontier\" (nonce-gamed)", "qubits": 1217, "toffoli": 1401748, "score": 1705927316, "sound": false, "note": "17–22 classical + 10–13 phase mismatches under independent seeds — NOT a correct circuit; only passes one hunted nonce"}
+  ]
+}
