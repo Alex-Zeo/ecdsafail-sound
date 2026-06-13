@@ -132,17 +132,18 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal();});
 
 fetch("leaderboard.json").then(r=>r.json()).then(d=>{
   DATA=d; const sota=d.entries[0], R=d.refs;
-  const pctAbove=Math.round((sota.qubits-R.google)/R.google*100);
-  document.getElementById("herostat").innerHTML=`<span class="accent">${pctAbove}%</span> above Google's correct circuit — and ${sota.qubits-R.google} qubits to go`;
-  // frontier track: Litinski 3000 -> Sound SOTA (current) -> Google 1175
+  const peakBest=d.entries.reduce((a,b)=>b.qubits<a.qubits?b:a);
+  const pctAbove=Math.round((peakBest.qubits-R.google)/R.google*100);
+  document.getElementById("herostat").innerHTML=`<span class="accent">${pctAbove}%</span> above Google's correct circuit — and ${peakBest.qubits-R.google} qubits to go`;
+  // frontier track: Litinski 3000 -> lowest sound peak (current) -> Google 1175
   const lo=R.google-80, hi=R.litinski+80, X=q=>((hi-q)/(hi-lo))*100;
-  const nodes=[{q:R.litinski,lab:"Litinski '23",cur:false},{q:sota.qubits,lab:'Sound SOTA',cur:true},{q:R.google,lab:'Google 1175 (target)',cur:false}];
-  let th=`<div class="seg" style="width:${X(sota.qubits)}%"></div>`;
+  const nodes=[{q:R.litinski,lab:"Litinski '23",cur:false},{q:peakBest.qubits,lab:'Lowest peak',cur:true},{q:R.google,lab:'Google 1175 (target)',cur:false}];
+  let th=`<div class="seg" style="width:${X(peakBest.qubits)}%"></div>`;
   nodes.forEach(n=>th+=`<div class="node ${n.cur?'cur':''}" style="left:${X(n.q)}%"><div class="lab">${n.lab}</div><div class="dot"></div>${n.cur?'<div class="sub">current</div>':''}</div>`);
   document.getElementById("track").innerHTML=th;
   // qubit chart: descent over levers, dotted Litinski + Google reference lines
   const W=900,H=260,pad=40, QHI=R.litinski+60, QLO=R.google-70;
-  const qpts=[{q:2292,l:'baseline'},{q:sota.qubits===2034?2039:sota.qubits,l:'SET-carry'},{q:sota.qubits,l:'SOTA'}];
+  const qpts=[...new Set(d.entries.map(e=>e.qubits))].sort((a,b)=>b-a).map(q=>({q}));
   const px=i=>pad+(i/(qpts.length-1))*(W-2*pad), py=q=>pad+((QHI-q)/(QHI-QLO))*(H-2*pad);
   let svg='';
   // reference dotted lines
