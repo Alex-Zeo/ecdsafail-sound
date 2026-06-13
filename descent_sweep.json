@@ -1,0 +1,8 @@
+[
+ {"config_id":"vent","knobs":"ROUND84_QPROD_VENT_PAD=1 ROUND84_QPROD_VENT_PAD_MINW=28 SQUARE_ROW_MAX_SEG=190","priority":1,"persona":"cryptoengineer","why":"tripod vent on the sound 2034 base (never tested with truncations off)"},
+ {"config_id":"vent_seg188","knobs":"ROUND84_QPROD_VENT_PAD=1 ROUND84_QPROD_VENT_PAD_MINW=28 SQUARE_ROW_MAX_SEG=188","priority":2,"persona":"hybrid","why":"vent + finer square windowing"},
+ {"config_id":"seg188","knobs":"SQUARE_ROW_MAX_SEG=188","priority":3,"persona":"quant","why":"square windowing alone"},
+ {"config_id":"seg186","knobs":"SQUARE_ROW_MAX_SEG=186","priority":3,"persona":"quant","why":"finer square windowing"},
+ {"config_id":"selfhost2","knobs":"SQUARE_SELFHOST_GATE_SUFFIX_CARRIES=2","priority":3,"persona":"cryptoengineer","why":"in-place suffix carries draw the row down"},
+ {"config_id":"vent_selfhost","knobs":"ROUND84_QPROD_VENT_PAD=1 ROUND84_QPROD_VENT_PAD_MINW=28 SQUARE_SELFHOST_GATE_SUFFIX_CARRIES=2","priority":2,"persona":"hybrid","why":"vent + selfhost stacked, both value-exact"}
+]
