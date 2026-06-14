@@ -1752,7 +1752,169 @@ pub fn build() -> Vec<Op> {
             return Vec::new();
         }
     }
+    if std::env::var("CMP_ACC_PLUS_F_MEASURED_BORROWED_SELFTEST").is_ok() {
+        match cmp_acc_plus_f_ge_p_measured_borrowed_selftest() {
+            Ok(()) => eprintln!(
+                "CMP_ACC_PLUS_F_MEASURED_BORROWED_SELFTEST: PASS (value-exact, acc/f & borrow restored, phase 0, matches non-borrowed over all seeds)"
+            ),
+            Err(e) => panic!("CMP_ACC_PLUS_F_MEASURED_BORROWED_SELFTEST: FAIL: {e}"),
+        }
+        if std::env::var("CMP_ACC_PLUS_F_MEASURED_BORROWED_SELFTEST_ONLY").ok().as_deref()
+            == Some("1")
+        {
+            return Vec::new();
+        }
+    }
+    if std::env::var("COSET_MODADD_SELFTEST").is_ok() {
+        match coset_modadd_selftest() {
+            Ok(()) => eprintln!(
+                "COSET_MODADD_SELFTEST: PASS (coset padded add reproduces mod-p on this model)"
+            ),
+            Err(e) => eprintln!("COSET_MODADD_SELFTEST: FAIL (EXPECTED — see report): {e}"),
+        }
+        if std::env::var("COSET_MODADD_SELFTEST_ONLY").ok().as_deref() == Some("1") {
+            return Vec::new();
+        }
+    }
     build_builder().ops
+}
+
+/// Isolated VALUE selftest for the coset/Zalka padded modular-add lever
+/// (`DIALOG_GCD_COSET_MODADD`). The lever's premise (Gidney arXiv:1905.08488,
+/// Zalka coset rep) is: pad each modular value with `c` HIGH qubits, seed the
+/// register as an *approximate eigenvector of +p*, then a PLAIN non-modular add
+/// of `x` performs `+x mod p` directly with error exponentially suppressed
+/// (~2^-c) PER padding qubit — deleting the comparator / fold / correction ladder.
+///
+/// This test instantiates exactly that construction on a toy modulus and checks
+/// the plain coset add against `(acc + x) mod p`, over the same kind of
+/// classical computational-basis inputs the SOUND grader (`eval_circuit`) uses.
+///
+/// PURPOSE: this is the brief's mandated *isolated phase-0/value proof gate*
+/// BEFORE any integration. It is written to PASS iff the coset add is
+/// value-correct on this benchmark's simulator. It is a NO-GATE: the harness
+/// reports the verdict and (per README-SOUND rule 4 — disclosed/bounded/counted)
+/// documents the model mismatch rather than shipping an unproven approximation.
+pub fn coset_modadd_selftest() -> Result<(), String> {
+    use crate::point_add::arith::cuccaro_add_fast;
+    // Toy modulus (odd prime), n data bits + c HIGH coset-padding bits.
+    const NB: usize = 7;
+    let p_small: u64 = 101; // < 2^NB = 128
+    // Coset padding width. The brief proposes c~40-50 against secp's n=256; the
+    // proportional toy value (c >= ~half of NB) is what matters for the bound
+    // claim. We test c in {3,5,7} — i.e. up to a FULL extra register width, far
+    // beyond the proportional c the brief targets, so a "too few padding bits"
+    // objection cannot explain a failure.
+    for &c_pad in &[3usize, 5usize, 7usize] {
+        let total = NB + c_pad;
+
+        let mut b = B::new();
+        let acc = b.alloc_qubits(total); // [data(NB) | coset padding(c_pad)]
+        let x = b.alloc_qubits(NB); // classical addend, < p
+        let c_in = b.alloc_qubit();
+        // PLAIN non-modular add of x into the low NB bits of the padded acc,
+        // carrying into the full `total`-wide register (the coset register). This
+        // is the lever's core op: NO conditional mod-subtract, NO comparator.
+        let x_ext: Vec<QubitId> = {
+            let mut v = x.clone();
+            // zero-extend the addend to the coset width so the plain adder spans
+            // the whole register (the coset is supposed to absorb the wrap).
+            for _ in 0..c_pad {
+                v.push(b.alloc_qubit());
+            }
+            v
+        };
+        cuccaro_add_fast(&mut b, &x_ext, &acc, c_in);
+        let ops = b.ops;
+        let nq = b.next_qubit as usize;
+        let nbit = b.next_bit as usize;
+
+        // The ONLY classical computational-basis seeding of a "coset eigenvector
+        // of +p" available in this simulator is a definite offset k*p in the
+        // padded register (a superposition over {v + k*p} is unrepresentable —
+        // see src/sim.rs: each qubit holds ONE classical bit per shot, Hmr/R
+        // PROJECT to |0>, there is no amplitude/superposition). We try every
+        // achievable classical seed k in [0, 2^c_pad) and the un-padded k=0.
+        let mut cases: Vec<(u64, u64)> = (0..60u64)
+            .map(|s| ((s * 7) % p_small, (s * 13 + 3) % p_small))
+            .collect();
+        cases.push((p_small - 1, p_small - 1)); // forces wrap: 2p-2 mod p
+        cases.push((p_small - 1, 1)); // exact wrap to 0
+        cases.push((50, 60)); // 110 mod 101 = 9
+        let ncases = cases.len();
+
+        let max_k = 1u64 << c_pad;
+        let mut any_k_correct_all = false;
+        let mut best_k = 0u64;
+        let mut best_fail: Option<(u64, u64, u64, u64)> = None; // (acc,x,got,want)
+
+        for k in 0..max_k {
+            // Seed acc = v + k*p (definite classical coset offset).
+            let make_xof = || {
+                use sha3::digest::{ExtendableOutput, Update};
+                let mut seed = sha3::Shake128::default();
+                seed.update(b"coset-modadd-selftest");
+                seed.update(&(c_pad as u64).to_le_bytes());
+                seed.update(&k.to_le_bytes());
+                seed.finalize_xof()
+            };
+            let mut xof = make_xof();
+            let mut sim = Simulator::new(nq, nbit, &mut xof);
+            sim.clear_for_shot();
+            for (shot, &(av, xv)) in cases.iter().enumerate() {
+                let acc_seed = av + k * p_small; // v + k*p in the padded register
+                for bit in 0..total {
+                    if (acc_seed >> bit) & 1 != 0 {
+                        *sim.qubit_mut(acc[bit]) |= 1u64 << shot;
+                    }
+                }
+                for bit in 0..NB {
+                    if (xv >> bit) & 1 != 0 {
+                        *sim.qubit_mut(x[bit]) |= 1u64 << shot;
+                    }
+                }
+            }
+            sim.apply_iter(ops.iter());
+
+            let mut all_ok = true;
+            for (shot, &(av, xv)) in cases.iter().enumerate() {
+                // Read the LOW NB data bits — the coset rep's "value" is the
+                // low n bits (the modular residue); padding holds the multiple.
+                let mut got = 0u64;
+                for bit in 0..NB {
+                    got |= ((sim.qubit(acc[bit]) >> shot) & 1) << bit;
+                }
+                let want = (av + xv) % p_small;
+                if got != want {
+                    all_ok = false;
+                    if best_fail.is_none() {
+                        best_fail = Some((av, xv, got, want));
+                    }
+                }
+            }
+            if all_ok {
+                any_k_correct_all = true;
+                best_k = k;
+                break;
+            }
+        }
+
+        if !any_k_correct_all {
+            let (av, xv, got, want) = best_fail.unwrap_or((0, 0, 0, 0));
+            return Err(format!(
+                "c_pad={c_pad}: NO classical coset offset k in [0,2^{c_pad}) makes a PLAIN \
+                 add value-correct over {ncases} cases; e.g. acc={av} x={xv} -> low bits {got}, \
+                 want (acc+x) mod {p_small} = {want}. (Plain add carries 2^n into padding, NOT p; \
+                 p={p_small} is not a power of two, so the coset never reduces in a deterministic \
+                 computational-basis model — the 2^-c amplitude bound is for SUPERPOSITION cosets, \
+                 which src/sim.rs cannot represent.)"
+            ));
+        }
+        // (Unreachable in practice; kept so a PASS is meaningful if the model ever
+        // changes to one that can represent the coset.)
+        let _ = best_k;
+    }
+    Ok(())
 }
 
 pub fn square_window_selftest() -> Result<(), String> {
@@ -2071,6 +2233,150 @@ pub fn cmp_acc_plus_f_ge_p_measured_selftest() -> Result<(), String> {
             if got_flag != want_flag {
                 return Err(format!(
                     "seed {seed_idx}: flag wrong acc={av} f={fv}: got {got_flag} want {want_flag}"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Isolated value+phase selftest for the BORROWED-carries measured comparator
+/// `cmp_acc_plus_f_ge_p_measured_borrowed` (descend-B / Approach B). Mirrors
+/// `cmp_acc_plus_f_ge_p_measured_selftest` but (a) supplies a non-trivial CLEAN
+/// |0> borrow pool of n lanes (so the borrowed path — NOT the fresh-deficit
+/// fallback — is exercised), (b) additionally asserts the borrow lanes are
+/// restored to |0>, and (c) asserts the borrowed comparator is value- AND
+/// phase-identical to the non-borrowed `cmp_acc_plus_f_ge_p_measured` on the same
+/// seeds (a true drop-in equivalence, not merely "correct"). Invoke via
+/// `CMP_ACC_PLUS_F_MEASURED_BORROWED_SELFTEST=1 build_circuit`.
+pub fn cmp_acc_plus_f_ge_p_measured_borrowed_selftest() -> Result<(), String> {
+    use crate::point_add::arith::{
+        cmp_acc_plus_f_ge_p_measured, cmp_acc_plus_f_ge_p_measured_borrowed,
+    };
+    const NB: usize = 7;
+    let p_small: u64 = 101; // odd prime, < 2^NB = 128
+    let c = U256::from((1u64 << NB) - p_small);
+
+    // ---- Build the BORROWED circuit (with a real clean |0> borrow pool). ----
+    let mut bb = B::new();
+    let acc_b = bb.alloc_qubits(NB);
+    let f_b = bb.alloc_qubits(NB);
+    let flag_b = bb.alloc_qubit();
+    // n = NB clean borrow lanes (the comparator needs n carry lanes).
+    let borrow = bb.alloc_qubits(NB);
+    cmp_acc_plus_f_ge_p_measured_borrowed(&mut bb, &acc_b, &f_b, c, flag_b, &borrow);
+    let ops_b = bb.ops;
+    let nq_b = bb.next_qubit as usize;
+    let nbit_b = bb.next_bit as usize;
+
+    // ---- Build the NON-borrowed reference circuit on the SAME acc/f/flag. ----
+    let mut br = B::new();
+    let acc_r = br.alloc_qubits(NB);
+    let f_r = br.alloc_qubits(NB);
+    let flag_r = br.alloc_qubit();
+    cmp_acc_plus_f_ge_p_measured(&mut br, &acc_r, &f_r, c, flag_r);
+    let ops_r = br.ops;
+    let nq_r = br.next_qubit as usize;
+    let nbit_r = br.next_bit as usize;
+
+    let mut cases: Vec<(u64, u64)> = (0..62u64)
+        .map(|s| ((s * 7) % p_small, (s * 13 + 3) % p_small))
+        .collect();
+    cases.push((35, 68)); // the SOUND-OPT-1 XOR-injection counterexample
+    cases.push((100, 100)); // both near top: 200 >= 101 -> 1
+
+    for seed_idx in 0..8u64 {
+        // Independent Hmr seed per run; reused for BOTH circuits so the phase
+        // comparison is apples-to-apples.
+        let make_xof = || {
+            use sha3::digest::{ExtendableOutput, Update};
+            let mut seed = sha3::Shake128::default();
+            seed.update(b"cmp-acc-plus-f-ge-p-measured-borrowed-selftest");
+            seed.update(&seed_idx.to_le_bytes());
+            seed.finalize_xof()
+        };
+
+        // ----- borrowed circuit -----
+        let mut xof_b = make_xof();
+        let mut sim_b = Simulator::new(nq_b, nbit_b, &mut xof_b);
+        sim_b.clear_for_shot();
+        for (shot, &(av, fv)) in cases.iter().enumerate() {
+            for k in 0..NB {
+                if (av >> k) & 1 != 0 {
+                    *sim_b.qubit_mut(acc_b[k]) |= 1u64 << shot;
+                }
+                if (fv >> k) & 1 != 0 {
+                    *sim_b.qubit_mut(f_b[k]) |= 1u64 << shot;
+                }
+            }
+        }
+        sim_b.apply_iter(ops_b.iter());
+        if sim_b.phase != 0 {
+            return Err(format!(
+                "seed {seed_idx}: BORROWED phase garbage 0x{:x}",
+                sim_b.phase
+            ));
+        }
+        for (shot, &(av, fv)) in cases.iter().enumerate() {
+            let mut got_acc = 0u64;
+            let mut got_f = 0u64;
+            for k in 0..NB {
+                got_acc |= ((sim_b.qubit(acc_b[k]) >> shot) & 1) << k;
+                got_f |= ((sim_b.qubit(f_b[k]) >> shot) & 1) << k;
+            }
+            let got_flag = (sim_b.qubit(flag_b) >> shot) & 1;
+            let want_flag = if av + fv >= p_small { 1 } else { 0 };
+            if got_acc != av {
+                return Err(format!("seed {seed_idx}: BORROWED acc not restored shot {shot}: got {got_acc} want {av}"));
+            }
+            if got_f != fv {
+                return Err(format!("seed {seed_idx}: BORROWED f not restored shot {shot}: got {got_f} want {fv}"));
+            }
+            if got_flag != want_flag {
+                return Err(format!(
+                    "seed {seed_idx}: BORROWED flag wrong acc={av} f={fv}: got {got_flag} want {want_flag}"
+                ));
+            }
+        }
+        // Borrow lanes must exit clean |0> on every shot.
+        for (li, &q) in borrow.iter().enumerate() {
+            if sim_b.qubit(q) != 0 {
+                return Err(format!(
+                    "seed {seed_idx}: borrow lane {li} not restored to |0>: 0x{:x}",
+                    sim_b.qubit(q)
+                ));
+            }
+        }
+
+        // ----- non-borrowed reference circuit (same seed) -----
+        let mut xof_r = make_xof();
+        let mut sim_r = Simulator::new(nq_r, nbit_r, &mut xof_r);
+        sim_r.clear_for_shot();
+        for (shot, &(av, fv)) in cases.iter().enumerate() {
+            for k in 0..NB {
+                if (av >> k) & 1 != 0 {
+                    *sim_r.qubit_mut(acc_r[k]) |= 1u64 << shot;
+                }
+                if (fv >> k) & 1 != 0 {
+                    *sim_r.qubit_mut(f_r[k]) |= 1u64 << shot;
+                }
+            }
+        }
+        sim_r.apply_iter(ops_r.iter());
+
+        // Equivalence: identical flag/acc/f outputs and identical global phase.
+        if sim_r.phase != sim_b.phase {
+            return Err(format!(
+                "seed {seed_idx}: phase mismatch borrowed=0x{:x} reference=0x{:x}",
+                sim_b.phase, sim_r.phase
+            ));
+        }
+        for (shot, _) in cases.iter().enumerate() {
+            let fb = (sim_b.qubit(flag_b) >> shot) & 1;
+            let fr = (sim_r.qubit(flag_r) >> shot) & 1;
+            if fb != fr {
+                return Err(format!(
+                    "seed {seed_idx}: flag mismatch vs reference shot {shot}: borrowed {fb} reference {fr}"
                 ));
             }
         }

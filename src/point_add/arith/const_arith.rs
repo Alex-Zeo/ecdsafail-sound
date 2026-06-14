@@ -414,6 +414,174 @@ pub(crate) fn sub_nbit_const_direct_uncontrolled_fast(b: &mut B, acc: &[QubitId]
     b.free(ctrl);
 }
 
+/// Borrowed-carries version of [`cadd_nbit_const_direct_fast`]. The `carries`
+/// array (n-1 clean |0> lanes) is supplied by the caller instead of being
+/// allocated, so the peak qubit count is not increased by this constant add.
+/// Gate sequence, value, and MEASURED (Hmr/cz_if) phase structure are byte-for-
+/// byte identical to `cadd_nbit_const_direct_fast`; only the carry lanes' source
+/// differs (the borrowed lanes are restored to |0> by the measured uncompute, so
+/// the host slice exits clean). `ctrl` plays the same role as in the base fn.
+pub(crate) fn cadd_nbit_const_direct_fast_borrowed_carries(
+    b: &mut B,
+    acc: &[QubitId],
+    c: U256,
+    ctrl: QubitId,
+    carries: &[QubitId],
+) {
+    let n = acc.len();
+    if n == 0 {
+        return;
+    }
+    if n == 1 {
+        if bit(c, 0) {
+            b.cx(ctrl, acc[0]);
+        }
+        return;
+    }
+    assert!(carries.len() >= n - 1);
+
+    for i in 0..n - 1 {
+        let target = carries[i];
+        let carry_in = if i == 0 { None } else { Some(carries[i - 1]) };
+        if bit(c, i) {
+            if let Some(ci) = carry_in {
+                emit_fold_majority(b, acc[i], ctrl, ci, target, false);
+            } else {
+                b.ccx(acc[i], ctrl, target);
+            }
+        } else if let Some(ci) = carry_in {
+            b.ccx(acc[i], ci, target);
+        }
+    }
+
+    for i in 0..n {
+        if bit(c, i) {
+            b.cx(ctrl, acc[i]);
+        }
+        if i > 0 {
+            b.cx(carries[i - 1], acc[i]);
+        }
+    }
+
+    for i in (0..n - 1).rev() {
+        let m = b.alloc_bit();
+        b.hmr(carries[i], m);
+        let carry_in = if i == 0 { None } else { Some(carries[i - 1]) };
+        if bit(c, i) {
+            b.x(acc[i]);
+            if let Some(ci) = carry_in {
+                b.cz_if(acc[i], ctrl, m);
+                b.cz_if(acc[i], ci, m);
+                b.x(acc[i]);
+                b.cz_if(ctrl, ci, m);
+            } else {
+                b.cz_if(acc[i], ctrl, m);
+                b.x(acc[i]);
+            }
+        } else if let Some(ci) = carry_in {
+            b.x(acc[i]);
+            b.cz_if(acc[i], ci, m);
+            b.x(acc[i]);
+        }
+    }
+}
+
+/// Borrowed-carries version of [`csub_nbit_const_direct_fast`] (the exact inverse
+/// of [`cadd_nbit_const_direct_fast_borrowed_carries`]). Same gate/value/phase
+/// structure as `csub_nbit_const_direct_fast`; carries supplied by caller and
+/// restored to |0>.
+pub(crate) fn csub_nbit_const_direct_fast_borrowed_carries(
+    b: &mut B,
+    acc: &[QubitId],
+    c: U256,
+    ctrl: QubitId,
+    borrows: &[QubitId],
+) {
+    let n = acc.len();
+    if n == 0 {
+        return;
+    }
+    if n == 1 {
+        if bit(c, 0) {
+            b.cx(ctrl, acc[0]);
+        }
+        return;
+    }
+    assert!(borrows.len() >= n - 1);
+
+    for i in 0..n - 1 {
+        let target = borrows[i];
+        let borrow_in = if i == 0 { None } else { Some(borrows[i - 1]) };
+        if bit(c, i) {
+            b.x(acc[i]);
+            if let Some(bi) = borrow_in {
+                emit_fold_majority(b, acc[i], ctrl, bi, target, false);
+            } else {
+                b.ccx(acc[i], ctrl, target);
+            }
+            b.x(acc[i]);
+        } else if let Some(bi) = borrow_in {
+            b.x(acc[i]);
+            b.ccx(acc[i], bi, target);
+            b.x(acc[i]);
+        }
+    }
+
+    for i in 0..n {
+        if bit(c, i) {
+            b.cx(ctrl, acc[i]);
+        }
+        if i > 0 {
+            b.cx(borrows[i - 1], acc[i]);
+        }
+    }
+
+    for i in (0..n - 1).rev() {
+        let m = b.alloc_bit();
+        b.hmr(borrows[i], m);
+        let borrow_in = if i == 0 { None } else { Some(borrows[i - 1]) };
+        if bit(c, i) {
+            if let Some(bi) = borrow_in {
+                b.cz_if(acc[i], ctrl, m);
+                b.cz_if(acc[i], bi, m);
+                b.cz_if(ctrl, bi, m);
+            } else {
+                b.cz_if(acc[i], ctrl, m);
+            }
+        } else if let Some(bi) = borrow_in {
+            b.cz_if(acc[i], bi, m);
+        }
+    }
+}
+
+/// Uncontrolled borrowed-carries const add: borrows the (n-1)-lane carry array
+/// from the caller; allocates only a single transient `ctrl` qubit (negligible).
+pub(crate) fn add_nbit_const_direct_uncontrolled_fast_borrowed_carries(
+    b: &mut B,
+    acc: &[QubitId],
+    c: U256,
+    carries: &[QubitId],
+) {
+    let ctrl = b.alloc_qubit();
+    b.x(ctrl);
+    cadd_nbit_const_direct_fast_borrowed_carries(b, acc, c, ctrl, carries);
+    b.x(ctrl);
+    b.free(ctrl);
+}
+
+pub(crate) fn sub_nbit_const_direct_uncontrolled_fast_borrowed_carries(
+    b: &mut B,
+    acc: &[QubitId],
+    c: U256,
+    borrows: &[QubitId],
+) {
+    let ctrl = b.alloc_qubit();
+    b.x(ctrl);
+    csub_nbit_const_direct_fast_borrowed_carries(b, acc, c, ctrl, borrows);
+    b.x(ctrl);
+    b.free(ctrl);
+}
+
 pub(crate) fn add_nbit_const_fast(b: &mut B, acc: &[QubitId], c: U256) {
     if secp_direct_const_arith_enabled() {
         add_nbit_const_direct_uncontrolled_fast(b, acc, c);

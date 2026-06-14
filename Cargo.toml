@@ -14,10 +14,6 @@ path = "src/bin/build_circuit.rs"
 name = "eval_circuit"
 path = "src/bin/eval_circuit.rs"
 
-[[bin]]
-name = "width_floor_census"
-path = "src/bin/width_floor_census.rs"
-
 [profile.release]
 opt-level = 3
 lto = "thin"

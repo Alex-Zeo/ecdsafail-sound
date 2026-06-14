@@ -750,6 +750,104 @@ pub(crate) fn cmp_acc_plus_f_ge_p_measured(
     b.free(acc_ovf);
 }
 
+/// Borrowed-carries variant of [`cmp_acc_plus_f_ge_p_measured`] (SOUND-OPT-2,
+/// Approach B). Identical predicate, value, and MEASURED (Hmr/cz_if) phase
+/// structure — the only difference is that each internal carry array (the two
+/// Cuccaro fast add/sub sweeps and the two SET-carry const add/sub sweeps) draws
+/// its `n` (= acc.len()) clean |0> lanes from a caller-supplied `borrowed` slice
+/// instead of allocating them, so it adds **zero** new peak qubits for every
+/// borrowed lane. The carry arrays run strictly sequentially (each is restored to
+/// |0> by its own measured backward sweep before the next begins), so a single
+/// borrowed pool of length `acc.len()` suffices and is reused across all four
+/// sweeps. When `borrowed` is shorter than the per-sweep need, the deficit is
+/// freshly allocated (gathered as `borrowed_prefix ++ owned`), exactly the
+/// PARTIAL-hosting pattern of `dialog_gcd_ccx_cmp_gt_truncated_into_width_hosted`.
+/// Borrowed lanes exit clean; owned lanes are freed.
+///
+/// IMPORTANT (soundness): the borrowed lanes MUST be genuinely clean (|0>) AND
+/// idle for the whole call. The caller is responsible for that contract; here we
+/// only assert the slice is internally distinct and disjoint from the operands.
+pub(crate) fn cmp_acc_plus_f_ge_p_measured_borrowed(
+    b: &mut B,
+    acc: &[QubitId],
+    f: &[QubitId],
+    c: U256,
+    flag: QubitId,
+    borrowed: &[QubitId],
+) {
+    let n = acc.len();
+    assert_eq!(n, f.len());
+    assert!(n > 0);
+
+    // Each sweep operates on the (n+1)-wide extended register and needs `n` carry
+    // lanes (cuccaro_*_fast on width n+1 allocates (n+1)-1 = n; the const add/sub
+    // on width n+1 needs (n+1)-1 = n). Gather a clean pool of exactly `n` lanes:
+    // borrowed prefix first, then a freshly-allocated deficit.
+    let need = n;
+    let avail = borrowed.len().min(need);
+    // Validate the borrowed prefix is internally distinct and disjoint from acc/f.
+    for (i, &q) in borrowed[..avail].iter().enumerate() {
+        debug_assert!(!borrowed[..i].contains(&q), "borrowed lanes must be distinct");
+        debug_assert!(!acc.contains(&q), "borrowed lane aliases acc");
+        debug_assert!(!f.contains(&q), "borrowed lane aliases f");
+        debug_assert!(q != flag, "borrowed lane aliases flag");
+    }
+    let owned = if avail < need {
+        b.alloc_qubits(need - avail)
+    } else {
+        Vec::new()
+    };
+    let mut pool: Vec<QubitId> = Vec::with_capacity(need);
+    pool.extend_from_slice(&borrowed[..avail]);
+    pool.extend_from_slice(&owned);
+    debug_assert_eq!(pool.len(), need);
+
+    if std::env::var("TRACE_CMP_BORROW").is_ok() {
+        eprintln!(
+            "CMP_BORROW need={} borrowed_avail={} owned_alloc={}",
+            need,
+            avail,
+            owned.len()
+        );
+    }
+
+    // Extend acc and f each with a clean overflow bit (these are genuine 1-qubit
+    // transients, NOT the binder; the 256-wide carry array is the binder and it is
+    // borrowed). acc_ext holds the (n+1)-bit sum.
+    let acc_ovf = b.alloc_qubit();
+    let mut acc_ext = acc.to_vec();
+    acc_ext.push(acc_ovf);
+    let f_ovf = b.alloc_qubit();
+    let mut f_ext = f.to_vec();
+    f_ext.push(f_ovf);
+
+    // acc_ext += f  (MEASURED Cuccaro-fast, carries borrowed).
+    let c_in_add = b.alloc_qubit();
+    cuccaro_add_fast_borrowed_carries(b, &f_ext, &acc_ext, c_in_add, &pool[..n]);
+    b.free(c_in_add);
+
+    // acc_ext += c  (MEASURED SET-carry const-add, carries borrowed).
+    add_nbit_const_direct_uncontrolled_fast_borrowed_carries(b, &acc_ext, c, &pool[..n]);
+
+    // bit n of acc_ext == (acc + f + c >= 2^n) == (acc + f >= p).
+    b.cx(acc_ext[n], flag);
+
+    // Restore acc_ext to acc: exact MEASURED inverses, in reverse order.
+    sub_nbit_const_direct_uncontrolled_fast_borrowed_carries(b, &acc_ext, c, &pool[..n]);
+    let c_in_sub = b.alloc_qubit();
+    cuccaro_sub_fast_borrowed_carries(b, &f_ext, &acc_ext, c_in_sub, &pool[..n]);
+    b.free(c_in_sub);
+
+    b.free(f_ovf);
+    b.free(acc_ovf);
+
+    // Release any freshly-allocated deficit lanes (borrowed lanes exit clean and
+    // are owned by the caller).
+    if !owned.is_empty() {
+        b.free_vec(&owned);
+    }
+}
+
 pub(crate) fn cmp_lt_into(b: &mut B, u: &[QubitId], v: &[QubitId], flag: QubitId) {
     let n = u.len();
     assert_eq!(n, v.len());

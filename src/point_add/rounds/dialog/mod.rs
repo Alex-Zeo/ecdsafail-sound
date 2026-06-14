@@ -1937,6 +1937,23 @@ pub(crate) fn dialog_gcd_cmod_sub_materialized_pseudomersenne_with_clean_scratch
         let c = U256::MAX.wrapping_sub(p).wrapping_add(U256::from(1u64));
         cmp_acc_plus_f_ge_p_measured(b, acc, &f, c, acc_ovf);
     } else if std::env::var("DIALOG_GCD_UNDERFLOW_CLEAN_CMP").ok().as_deref()
+        == Some("acc_plus_f_measured_borrowed")
+    {
+        // SOUND-OPT-2 / descend-B (Approach B): the SAME value-exact, phase-clean
+        // measured comparator as `acc_plus_f_measured`, but its internal carry
+        // arrays are drawn from a caller-supplied clean |0> borrow pool (the idle
+        // future-log / clean_scratch region) instead of fresh allocation, so it
+        // adds zero new peak qubits for every borrowed lane. Where the borrow pool
+        // is too short, the deficit is allocated fresh (value-/phase-identical).
+        // The borrow pool here is `clean_scratch` (the current compressed block's
+        // |0> cells under DIALOG_GCD_APPLY_REPLAY_SWAP_HOST). NB: in the canonical
+        // compressed-sidecar config this clean idle-ACTIVE region is only ~5 cells
+        // wide (the compressed transcript is otherwise dirty data and `u` has been
+        // released to the inactive free pool), so the peak does NOT drop to the
+        // ~1783 add/sub carry tier — see SOUND-OPT-3.md / descend-B writeup.
+        let c = U256::MAX.wrapping_sub(p).wrapping_add(U256::from(1u64));
+        cmp_acc_plus_f_ge_p_measured_borrowed(b, acc, &f, c, acc_ovf, clean_scratch);
+    } else if std::env::var("DIALOG_GCD_UNDERFLOW_CLEAN_CMP").ok().as_deref()
         == Some("acc_plus_f")
     {
         // EXPERIMENTAL low-peak comparator (SOUND-OPT-1). Replaces the peak-binding
