@@ -136,6 +136,8 @@ def truncation_reason(knobs):
     m = re.search(r"DIALOG_GCD_ACTIVE_ITERATIONS=(\d+)", knobs or "")
     if m and int(m.group(1)) < PROVEN_ITER_FLOOR:
         return "active_iterations=%s < proven floor %d (GCD truncation; K-seed pass = tail-evasion, not soundness)" % (m.group(1), PROVEN_ITER_FLOOR)
+    if re.search(r"DIALOG_GCD_WIDTH_(MARGIN|SLOPE)", knobs or ""):
+        return "width-envelope override (DIALOG_GCD_WIDTH_*) — width-tightening is a proven cliff (same near-p worst case; the q×T-winning configs are truncations, the sound ones don't beat SOTA); needs a proven width-floor census before use"
     return None
 def do_init():
     c = conn(); c.executescript(SCHEMA); c.execute("INSERT OR IGNORE INTO control(id,run) VALUES(1,1)"); c.commit(); print("init", DB)

@@ -40,3 +40,23 @@ peak floor is **2034** (the comparator carry array; SOUND-OPT-3/5). The lowest *
 peak via iteration truncation is below even the gamed/invalid region.
 
 Sub-402 active configs are tagged `rejected_unsound_iters` in the SSOT.
+
+## Width envelope: the same cliff (2026-06-14)
+
+The sweep also produced K=8-passing "wins" by tightening the **width** envelope
+(`DIALOG_GCD_WIDTH_MARGIN` / `DIALOG_GCD_WIDTH_SLOPE_X1000`) — down to q×T **6,083,635,014**
+(margin=30, slope=780). A width census confirmed the binding worst case is the **same near-`p` family**
+as the iteration case (`u` stays near-full-width longest). The decisive arithmetic:
+
+- The only width configs that **beat** SOUND-OPT-5 (6.493B) are the **most aggressive** — 6.08B / 6.13B /
+  6.36B (`below_floor_m30`, `slope_1000`, `slope_900`) — i.e. the prime truncation suspects.
+- The conservative, plausibly-sound configs (6.70–6.79B) **do not beat the SOTA.**
+
+So the width-tightening *winners* are truncations and the *sound* width configs aren't wins — the **same
+cliff as iterations**. **Rejected:** all 27 width-override configs re-labelled `rejected_unsound_width`
+in the SSOT; the seed guard now auto-rejects any `DIALOG_GCD_WIDTH_*` override pending a proven
+width-floor census. (The census agent stalled on an infra watchdog before returning the precise floor;
+the conservative reject plus this arithmetic close the q×T question regardless.)
+
+**General rule: envelope-tightening — in iterations or width — is a cliff on this circuit.** The honest
+descent comes from value-exact levers (stacked on SOUND-OPT-5) and new code, not from shrinking margins.
