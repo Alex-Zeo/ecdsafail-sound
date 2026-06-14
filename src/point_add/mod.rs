@@ -1765,156 +1765,35 @@ pub fn build() -> Vec<Op> {
             return Vec::new();
         }
     }
-    if std::env::var("COSET_MODADD_SELFTEST").is_ok() {
-        match coset_modadd_selftest() {
+    if std::env::var("CMP_ACC_PLUS_F_MEASURED_WINDOWED_SELFTEST").is_ok() {
+        match cmp_acc_plus_f_ge_p_measured_windowed_selftest() {
             Ok(()) => eprintln!(
-                "COSET_MODADD_SELFTEST: PASS (coset padded add reproduces mod-p on this model)"
+                "CMP_ACC_PLUS_F_MEASURED_WINDOWED_SELFTEST: PASS (value-exact, acc/f restored, phase 0, matches non-windowed over B in {{2,3,4,5}} x 8 seeds)"
             ),
-            Err(e) => eprintln!("COSET_MODADD_SELFTEST: FAIL (EXPECTED — see report): {e}"),
+            Err(e) => panic!("CMP_ACC_PLUS_F_MEASURED_WINDOWED_SELFTEST: FAIL: {e}"),
         }
-        if std::env::var("COSET_MODADD_SELFTEST_ONLY").ok().as_deref() == Some("1") {
+        if std::env::var("CMP_ACC_PLUS_F_MEASURED_WINDOWED_SELFTEST_ONLY").ok().as_deref()
+            == Some("1")
+        {
+            return Vec::new();
+        }
+    }
+    if std::env::var("CMP_ACC_PLUS_F_MEASURED_CONDITIONED_WINDOWED_SELFTEST").is_ok() {
+        match cmp_acc_plus_f_ge_p_measured_conditioned_windowed_selftest() {
+            Ok(()) => eprintln!(
+                "CMP_ACC_PLUS_F_MEASURED_CONDITIONED_WINDOWED_SELFTEST: PASS (cleaning contract: flag->0, acc/f restored, phase 0, BYTE-IDENTICAL flag/acc/f/phase vs non-conditioned non-windowed reference over B in {{2,3,4,5}} x 8 seeds x 2 widths)"
+            ),
+            Err(e) => panic!("CMP_ACC_PLUS_F_MEASURED_CONDITIONED_WINDOWED_SELFTEST: FAIL: {e}"),
+        }
+        if std::env::var("CMP_ACC_PLUS_F_MEASURED_CONDITIONED_WINDOWED_SELFTEST_ONLY")
+            .ok()
+            .as_deref()
+            == Some("1")
+        {
             return Vec::new();
         }
     }
     build_builder().ops
-}
-
-/// Isolated VALUE selftest for the coset/Zalka padded modular-add lever
-/// (`DIALOG_GCD_COSET_MODADD`). The lever's premise (Gidney arXiv:1905.08488,
-/// Zalka coset rep) is: pad each modular value with `c` HIGH qubits, seed the
-/// register as an *approximate eigenvector of +p*, then a PLAIN non-modular add
-/// of `x` performs `+x mod p` directly with error exponentially suppressed
-/// (~2^-c) PER padding qubit — deleting the comparator / fold / correction ladder.
-///
-/// This test instantiates exactly that construction on a toy modulus and checks
-/// the plain coset add against `(acc + x) mod p`, over the same kind of
-/// classical computational-basis inputs the SOUND grader (`eval_circuit`) uses.
-///
-/// PURPOSE: this is the brief's mandated *isolated phase-0/value proof gate*
-/// BEFORE any integration. It is written to PASS iff the coset add is
-/// value-correct on this benchmark's simulator. It is a NO-GATE: the harness
-/// reports the verdict and (per README-SOUND rule 4 — disclosed/bounded/counted)
-/// documents the model mismatch rather than shipping an unproven approximation.
-pub fn coset_modadd_selftest() -> Result<(), String> {
-    use crate::point_add::arith::cuccaro_add_fast;
-    // Toy modulus (odd prime), n data bits + c HIGH coset-padding bits.
-    const NB: usize = 7;
-    let p_small: u64 = 101; // < 2^NB = 128
-    // Coset padding width. The brief proposes c~40-50 against secp's n=256; the
-    // proportional toy value (c >= ~half of NB) is what matters for the bound
-    // claim. We test c in {3,5,7} — i.e. up to a FULL extra register width, far
-    // beyond the proportional c the brief targets, so a "too few padding bits"
-    // objection cannot explain a failure.
-    for &c_pad in &[3usize, 5usize, 7usize] {
-        let total = NB + c_pad;
-
-        let mut b = B::new();
-        let acc = b.alloc_qubits(total); // [data(NB) | coset padding(c_pad)]
-        let x = b.alloc_qubits(NB); // classical addend, < p
-        let c_in = b.alloc_qubit();
-        // PLAIN non-modular add of x into the low NB bits of the padded acc,
-        // carrying into the full `total`-wide register (the coset register). This
-        // is the lever's core op: NO conditional mod-subtract, NO comparator.
-        let x_ext: Vec<QubitId> = {
-            let mut v = x.clone();
-            // zero-extend the addend to the coset width so the plain adder spans
-            // the whole register (the coset is supposed to absorb the wrap).
-            for _ in 0..c_pad {
-                v.push(b.alloc_qubit());
-            }
-            v
-        };
-        cuccaro_add_fast(&mut b, &x_ext, &acc, c_in);
-        let ops = b.ops;
-        let nq = b.next_qubit as usize;
-        let nbit = b.next_bit as usize;
-
-        // The ONLY classical computational-basis seeding of a "coset eigenvector
-        // of +p" available in this simulator is a definite offset k*p in the
-        // padded register (a superposition over {v + k*p} is unrepresentable —
-        // see src/sim.rs: each qubit holds ONE classical bit per shot, Hmr/R
-        // PROJECT to |0>, there is no amplitude/superposition). We try every
-        // achievable classical seed k in [0, 2^c_pad) and the un-padded k=0.
-        let mut cases: Vec<(u64, u64)> = (0..60u64)
-            .map(|s| ((s * 7) % p_small, (s * 13 + 3) % p_small))
-            .collect();
-        cases.push((p_small - 1, p_small - 1)); // forces wrap: 2p-2 mod p
-        cases.push((p_small - 1, 1)); // exact wrap to 0
-        cases.push((50, 60)); // 110 mod 101 = 9
-        let ncases = cases.len();
-
-        let max_k = 1u64 << c_pad;
-        let mut any_k_correct_all = false;
-        let mut best_k = 0u64;
-        let mut best_fail: Option<(u64, u64, u64, u64)> = None; // (acc,x,got,want)
-
-        for k in 0..max_k {
-            // Seed acc = v + k*p (definite classical coset offset).
-            let make_xof = || {
-                use sha3::digest::{ExtendableOutput, Update};
-                let mut seed = sha3::Shake128::default();
-                seed.update(b"coset-modadd-selftest");
-                seed.update(&(c_pad as u64).to_le_bytes());
-                seed.update(&k.to_le_bytes());
-                seed.finalize_xof()
-            };
-            let mut xof = make_xof();
-            let mut sim = Simulator::new(nq, nbit, &mut xof);
-            sim.clear_for_shot();
-            for (shot, &(av, xv)) in cases.iter().enumerate() {
-                let acc_seed = av + k * p_small; // v + k*p in the padded register
-                for bit in 0..total {
-                    if (acc_seed >> bit) & 1 != 0 {
-                        *sim.qubit_mut(acc[bit]) |= 1u64 << shot;
-                    }
-                }
-                for bit in 0..NB {
-                    if (xv >> bit) & 1 != 0 {
-                        *sim.qubit_mut(x[bit]) |= 1u64 << shot;
-                    }
-                }
-            }
-            sim.apply_iter(ops.iter());
-
-            let mut all_ok = true;
-            for (shot, &(av, xv)) in cases.iter().enumerate() {
-                // Read the LOW NB data bits — the coset rep's "value" is the
-                // low n bits (the modular residue); padding holds the multiple.
-                let mut got = 0u64;
-                for bit in 0..NB {
-                    got |= ((sim.qubit(acc[bit]) >> shot) & 1) << bit;
-                }
-                let want = (av + xv) % p_small;
-                if got != want {
-                    all_ok = false;
-                    if best_fail.is_none() {
-                        best_fail = Some((av, xv, got, want));
-                    }
-                }
-            }
-            if all_ok {
-                any_k_correct_all = true;
-                best_k = k;
-                break;
-            }
-        }
-
-        if !any_k_correct_all {
-            let (av, xv, got, want) = best_fail.unwrap_or((0, 0, 0, 0));
-            return Err(format!(
-                "c_pad={c_pad}: NO classical coset offset k in [0,2^{c_pad}) makes a PLAIN \
-                 add value-correct over {ncases} cases; e.g. acc={av} x={xv} -> low bits {got}, \
-                 want (acc+x) mod {p_small} = {want}. (Plain add carries 2^n into padding, NOT p; \
-                 p={p_small} is not a power of two, so the coset never reduces in a deterministic \
-                 computational-basis model — the 2^-c amplitude bound is for SUPERPOSITION cosets, \
-                 which src/sim.rs cannot represent.)"
-            ));
-        }
-        // (Unreachable in practice; kept so a PASS is meaningful if the model ever
-        // changes to one that can represent the coset.)
-        let _ = best_k;
-    }
-    Ok(())
 }
 
 pub fn square_window_selftest() -> Result<(), String> {
@@ -2380,6 +2259,349 @@ pub fn cmp_acc_plus_f_ge_p_measured_borrowed_selftest() -> Result<(), String> {
                 ));
             }
         }
+    }
+    Ok(())
+}
+
+/// Isolated value+phase selftest for the WINDOWED measured comparator
+/// `cmp_acc_plus_f_ge_p_measured_windowed` (SOUND-OPT-4). Mirrors the borrowed
+/// selftest's drop-in-equivalence methodology: for each block count B in {2,3,4,5}
+/// and each of 8 independent Hmr seeds it asserts the windowed comparator is
+/// (a) value-exact (flag == (acc+f>=p)), (b) acc/f restored bit-for-bit,
+/// (c) phase 0, AND (d) flag- AND global-phase-IDENTICAL to the non-windowed
+/// `cmp_acc_plus_f_ge_p_measured` on the same seed. Runs TWO widths: NB=7 (p=101,
+/// incl. the (35,68) XOR-injection counterexample) and a wider NB=24 with a sparse
+/// secp-like constant c = 2^9 + 17, including adversarial near-2^NB and long-carry
+/// (acc=f=2^NB-1) cases that force the carry to propagate ACROSS every block boundary
+/// up to bit n — the exact mis-cut that a truncated window would silently corrupt.
+/// Invoke via `CMP_ACC_PLUS_F_MEASURED_WINDOWED_SELFTEST=1 build_circuit`.
+pub fn cmp_acc_plus_f_ge_p_measured_windowed_selftest() -> Result<(), String> {
+    use crate::point_add::arith::{
+        cmp_acc_plus_f_ge_p_measured, cmp_acc_plus_f_ge_p_measured_windowed,
+    };
+
+    // width-parameterized inner check.
+    fn check_width(nb: usize, p_small: u128, blocks: usize) -> Result<(), String> {
+        let c = U256::from(((1u128 << nb) - p_small) as u64);
+
+        // ---- windowed circuit ----
+        let mut bw = B::new();
+        let acc_w = bw.alloc_qubits(nb);
+        let f_w = bw.alloc_qubits(nb);
+        let flag_w = bw.alloc_qubit();
+        cmp_acc_plus_f_ge_p_measured_windowed(&mut bw, &acc_w, &f_w, c, flag_w, blocks);
+        let ops_w = bw.ops;
+        let nq_w = bw.next_qubit as usize;
+        let nbit_w = bw.next_bit as usize;
+
+        // ---- non-windowed reference ----
+        let mut br = B::new();
+        let acc_r = br.alloc_qubits(nb);
+        let f_r = br.alloc_qubits(nb);
+        let flag_r = br.alloc_qubit();
+        cmp_acc_plus_f_ge_p_measured(&mut br, &acc_r, &f_r, c, flag_r);
+        let ops_r = br.ops;
+        let nq_r = br.next_qubit as usize;
+        let nbit_r = br.next_bit as usize;
+
+        // cases: spread + adversarial. acc,f in [0,p).
+        let mut cases: Vec<(u128, u128)> = (0..58u128)
+            .map(|s| ((s * 7 + 1) % p_small, (s * 13 + 3) % p_small))
+            .collect();
+        if nb == 7 {
+            cases.push((35, 68)); // the SOUND-OPT-1 XOR-injection counterexample
+        }
+        // long-carry / near-top adversarial cases (force carry across all blocks):
+        cases.push((p_small - 1, p_small - 1)); // 2p-2: max sum, carry to bit n
+        cases.push((p_small - 1, 0));
+        cases.push((0, p_small - 1));
+        cases.push((p_small - 1, 1));
+        cases.push((p_small / 2, p_small / 2));
+        // cap shots to the 64-bit shot mask
+        cases.truncate(64);
+
+        for seed_idx in 0..8u64 {
+            let make_xof = || {
+                use sha3::digest::{ExtendableOutput, Update};
+                let mut seed = sha3::Shake128::default();
+                seed.update(b"cmp-acc-plus-f-ge-p-measured-windowed-selftest");
+                seed.update(&(nb as u64).to_le_bytes());
+                seed.update(&(blocks as u64).to_le_bytes());
+                seed.update(&seed_idx.to_le_bytes());
+                seed.finalize_xof()
+            };
+
+            // windowed
+            let mut xof_w = make_xof();
+            let mut sim_w = Simulator::new(nq_w, nbit_w, &mut xof_w);
+            sim_w.clear_for_shot();
+            for (shot, &(av, fv)) in cases.iter().enumerate() {
+                for k in 0..nb {
+                    if (av >> k) & 1 != 0 {
+                        *sim_w.qubit_mut(acc_w[k]) |= 1u64 << shot;
+                    }
+                    if (fv >> k) & 1 != 0 {
+                        *sim_w.qubit_mut(f_w[k]) |= 1u64 << shot;
+                    }
+                }
+            }
+            sim_w.apply_iter(ops_w.iter());
+            if sim_w.phase != 0 {
+                return Err(format!(
+                    "nb={nb} B={blocks} seed {seed_idx}: WINDOWED phase garbage 0x{:x}",
+                    sim_w.phase
+                ));
+            }
+            for (shot, &(av, fv)) in cases.iter().enumerate() {
+                let mut got_acc = 0u128;
+                let mut got_f = 0u128;
+                for k in 0..nb {
+                    got_acc |= (((sim_w.qubit(acc_w[k]) >> shot) & 1) as u128) << k;
+                    got_f |= (((sim_w.qubit(f_w[k]) >> shot) & 1) as u128) << k;
+                }
+                let got_flag = (sim_w.qubit(flag_w) >> shot) & 1;
+                let want_flag = if av + fv >= p_small { 1 } else { 0 };
+                if got_acc != av {
+                    return Err(format!(
+                        "nb={nb} B={blocks} seed {seed_idx}: acc not restored shot {shot}: got {got_acc} want {av}"
+                    ));
+                }
+                if got_f != fv {
+                    return Err(format!(
+                        "nb={nb} B={blocks} seed {seed_idx}: f not restored shot {shot}: got {got_f} want {fv}"
+                    ));
+                }
+                if got_flag != want_flag {
+                    return Err(format!(
+                        "nb={nb} B={blocks} seed {seed_idx}: flag wrong acc={av} f={fv}: got {got_flag} want {want_flag}"
+                    ));
+                }
+            }
+
+            // reference (same seed) — equivalence check
+            let mut xof_r = make_xof();
+            let mut sim_r = Simulator::new(nq_r, nbit_r, &mut xof_r);
+            sim_r.clear_for_shot();
+            for (shot, &(av, fv)) in cases.iter().enumerate() {
+                for k in 0..nb {
+                    if (av >> k) & 1 != 0 {
+                        *sim_r.qubit_mut(acc_r[k]) |= 1u64 << shot;
+                    }
+                    if (fv >> k) & 1 != 0 {
+                        *sim_r.qubit_mut(f_r[k]) |= 1u64 << shot;
+                    }
+                }
+            }
+            sim_r.apply_iter(ops_r.iter());
+            if sim_r.phase != sim_w.phase {
+                return Err(format!(
+                    "nb={nb} B={blocks} seed {seed_idx}: phase mismatch windowed=0x{:x} reference=0x{:x}",
+                    sim_w.phase, sim_r.phase
+                ));
+            }
+            for (shot, _) in cases.iter().enumerate() {
+                let fw = (sim_w.qubit(flag_w) >> shot) & 1;
+                let fr = (sim_r.qubit(flag_r) >> shot) & 1;
+                if fw != fr {
+                    return Err(format!(
+                        "nb={nb} B={blocks} seed {seed_idx}: flag mismatch vs reference shot {shot}: windowed {fw} reference {fr}"
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    for &blocks in &[2usize, 3, 4, 5] {
+        // NB=7, p=101 (matches the existing CMP selftests + the (35,68) case).
+        check_width(7, 101, blocks)?;
+        // Wider width with a sparse constant c = 2^NB - p_small. Use p_small so
+        // that c = 2^9 + 17 (sparse, secp-like high bit far below n), exercising
+        // boundary carries through many all-zero const blocks.
+        check_width(24, (1u128 << 24) - ((1u128 << 9) + 17), blocks)?;
+    }
+    Ok(())
+}
+
+/// Isolated value+phase selftest for the COMBINED windowed+phase-conditioned
+/// comparator `cmp_acc_plus_f_ge_p_measured_phase_conditioned_windowed`
+/// (panel2 SOUND-OPT-7 — the un-built OPT-4+OPT-5 stack). This is the gate the
+/// brief requires BEFORE any grade: composing two independently-proven transforms
+/// (windowing = value/phase-identical, OPT-4 selftest; conditioning = value/phase-
+/// identical on the cleaning contract, OPT-5 selftest) does NOT guarantee the
+/// composition is identical — only a fresh differential check does.
+///
+/// For each block count B in {2,3,4,5}, each of 8 independent Hmr seeds, and TWO
+/// widths (NB=7/p=101 incl. the (35,68) XOR counterexample; NB=24 sparse const +
+/// long-carry adversarial cases), it asserts the conditioned+windowed comparator,
+/// seeded with `flag = predicate` on entry (the cleaning contract):
+///   (a) cleaning contract: flag exits |0>;
+///   (b) acc/f restored bit-for-bit;
+///   (c) global phase 0 (the measured Z-replay cancels the Hmr-injected phase);
+///   (d) BYTE-IDENTICAL flag/acc/f outputs AND global phase vs the non-conditioned
+///       non-windowed reference `cmp_acc_plus_f_ge_p_measured` on the SAME seed
+///       (which, with flag=predicate on entry, also nets flag->0 / phase 0).
+/// Invoke via `CMP_ACC_PLUS_F_MEASURED_CONDITIONED_WINDOWED_SELFTEST=1 build_circuit`.
+pub fn cmp_acc_plus_f_ge_p_measured_conditioned_windowed_selftest() -> Result<(), String> {
+    use crate::point_add::arith::{
+        cmp_acc_plus_f_ge_p_measured, cmp_acc_plus_f_ge_p_measured_phase_conditioned_windowed,
+    };
+
+    fn check_width(nb: usize, p_small: u128, blocks: usize) -> Result<(), String> {
+        let c = U256::from(((1u128 << nb) - p_small) as u64);
+
+        // ---- conditioned+windowed circuit ----
+        let mut bc = B::new();
+        let acc_c = bc.alloc_qubits(nb);
+        let f_c = bc.alloc_qubits(nb);
+        let flag_c = bc.alloc_qubit();
+        cmp_acc_plus_f_ge_p_measured_phase_conditioned_windowed(
+            &mut bc, &acc_c, &f_c, c, flag_c, blocks,
+        );
+        let ops_c = bc.ops;
+        let nq_c = bc.next_qubit as usize;
+        let nbit_c = bc.next_bit as usize;
+
+        // ---- non-conditioned non-windowed reference ----
+        let mut br = B::new();
+        let acc_r = br.alloc_qubits(nb);
+        let f_r = br.alloc_qubits(nb);
+        let flag_r = br.alloc_qubit();
+        cmp_acc_plus_f_ge_p_measured(&mut br, &acc_r, &f_r, c, flag_r);
+        let ops_r = br.ops;
+        let nq_r = br.next_qubit as usize;
+        let nbit_r = br.next_bit as usize;
+
+        // cases: spread + adversarial. acc,f in [0,p).
+        let mut cases: Vec<(u128, u128)> = (0..56u128)
+            .map(|s| ((s * 7 + 1) % p_small, (s * 13 + 3) % p_small))
+            .collect();
+        if nb == 7 {
+            cases.push((35, 68)); // the SOUND-OPT-1 XOR-injection counterexample (pr=1)
+            cases.push((100, 100)); // both near top: 200 >= 101 -> pr=1
+        }
+        // long-carry / near-top adversarial cases (force carry across all blocks):
+        cases.push((p_small - 1, p_small - 1)); // 2p-2: max sum, carry to bit n
+        cases.push((p_small - 1, 0));
+        cases.push((0, p_small - 1));
+        cases.push((p_small - 1, 1));
+        cases.push((p_small / 2, p_small / 2));
+        cases.truncate(64);
+
+        for seed_idx in 0..8u64 {
+            // Independent Hmr seed per run; reused for BOTH circuits so the phase
+            // comparison is apples-to-apples (same rng stream).
+            let make_xof = || {
+                use sha3::digest::{ExtendableOutput, Update};
+                let mut seed = sha3::Shake128::default();
+                seed.update(b"cmp-acc-plus-f-ge-p-measured-conditioned-windowed-selftest");
+                seed.update(&(nb as u64).to_le_bytes());
+                seed.update(&(blocks as u64).to_le_bytes());
+                seed.update(&seed_idx.to_le_bytes());
+                seed.finalize_xof()
+            };
+
+            // Seed acc/f AND flag = predicate (the cleaning contract).
+            let seed_inputs = |sim: &mut Simulator<'_, sha3::Shake128Reader>,
+                               acc: &[QubitId],
+                               f: &[QubitId],
+                               flag: QubitId| {
+                sim.clear_for_shot();
+                for (shot, &(av, fv)) in cases.iter().enumerate() {
+                    for k in 0..nb {
+                        if (av >> k) & 1 != 0 {
+                            *sim.qubit_mut(acc[k]) |= 1u64 << shot;
+                        }
+                        if (fv >> k) & 1 != 0 {
+                            *sim.qubit_mut(f[k]) |= 1u64 << shot;
+                        }
+                    }
+                    if av + fv >= p_small {
+                        *sim.qubit_mut(flag) |= 1u64 << shot;
+                    }
+                }
+            };
+
+            // ----- conditioned+windowed circuit -----
+            let mut xof_c = make_xof();
+            let mut sim_c = Simulator::new(nq_c, nbit_c, &mut xof_c);
+            seed_inputs(&mut sim_c, &acc_c, &f_c, flag_c);
+            sim_c.apply_iter(ops_c.iter());
+            if sim_c.phase != 0 {
+                return Err(format!(
+                    "nb={nb} B={blocks} seed {seed_idx}: CONDITIONED+WINDOWED phase garbage 0x{:x} (measured replay must cancel)",
+                    sim_c.phase
+                ));
+            }
+            for (shot, &(av, fv)) in cases.iter().enumerate() {
+                let mut got_acc = 0u128;
+                let mut got_f = 0u128;
+                for k in 0..nb {
+                    got_acc |= (((sim_c.qubit(acc_c[k]) >> shot) & 1) as u128) << k;
+                    got_f |= (((sim_c.qubit(f_c[k]) >> shot) & 1) as u128) << k;
+                }
+                let got_flag = (sim_c.qubit(flag_c) >> shot) & 1;
+                if got_acc != av {
+                    return Err(format!(
+                        "nb={nb} B={blocks} seed {seed_idx}: acc not restored shot {shot}: got {got_acc} want {av}"
+                    ));
+                }
+                if got_f != fv {
+                    return Err(format!(
+                        "nb={nb} B={blocks} seed {seed_idx}: f not restored shot {shot}: got {got_f} want {fv}"
+                    ));
+                }
+                // Cleaning contract: flag = predicate on entry -> flag = 0 on exit.
+                if got_flag != 0 {
+                    return Err(format!(
+                        "nb={nb} B={blocks} seed {seed_idx}: flag not cleaned to 0 shot {shot} (acc={av} f={fv}): got {got_flag}"
+                    ));
+                }
+            }
+
+            // ----- reference (same seed, same inputs) -----
+            let mut xof_r = make_xof();
+            let mut sim_r = Simulator::new(nq_r, nbit_r, &mut xof_r);
+            seed_inputs(&mut sim_r, &acc_r, &f_r, flag_r);
+            sim_r.apply_iter(ops_r.iter());
+
+            if sim_r.phase != sim_c.phase {
+                return Err(format!(
+                    "nb={nb} B={blocks} seed {seed_idx}: phase mismatch conditioned-windowed=0x{:x} reference=0x{:x}",
+                    sim_c.phase, sim_r.phase
+                ));
+            }
+            for (shot, _) in cases.iter().enumerate() {
+                let fc = (sim_c.qubit(flag_c) >> shot) & 1;
+                let fr = (sim_r.qubit(flag_r) >> shot) & 1;
+                if fc != fr {
+                    return Err(format!(
+                        "nb={nb} B={blocks} seed {seed_idx}: flag mismatch vs reference shot {shot}: conditioned-windowed {fc} reference {fr}"
+                    ));
+                }
+                let mut ac = 0u128;
+                let mut ar = 0u128;
+                let mut fcv = 0u128;
+                let mut frv = 0u128;
+                for k in 0..nb {
+                    ac |= (((sim_c.qubit(acc_c[k]) >> shot) & 1) as u128) << k;
+                    ar |= (((sim_r.qubit(acc_r[k]) >> shot) & 1) as u128) << k;
+                    fcv |= (((sim_c.qubit(f_c[k]) >> shot) & 1) as u128) << k;
+                    frv |= (((sim_r.qubit(f_r[k]) >> shot) & 1) as u128) << k;
+                }
+                if ac != ar || fcv != frv {
+                    return Err(format!(
+                        "nb={nb} B={blocks} seed {seed_idx}: acc/f mismatch vs reference shot {shot}: conditioned-windowed(acc={ac},f={fcv}) reference(acc={ar},f={frv})"
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    for &blocks in &[2usize, 3, 4, 5] {
+        check_width(7, 101, blocks)?;
+        check_width(24, (1u128 << 24) - ((1u128 << 9) + 17), blocks)?;
     }
     Ok(())
 }

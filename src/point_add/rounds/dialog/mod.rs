@@ -1229,6 +1229,19 @@ pub(crate) fn dialog_gcd_apply_window_blocks() -> Option<usize> {
         .filter(|&w| w >= 2)
 }
 
+/// SOUND-OPT-4 lever: when set to B>=2, the apply-phase underflow-correction
+/// comparator (`acc_plus_f_measured`) windows its four internal (n+1)-wide carry
+/// arrays into B blocks, dropping its peak transient from ~n down to ~(n+1)/B +
+/// (B-1). Composes with the canonical `DIALOG_GCD_UNDERFLOW_CLEAN_CMP=
+/// acc_plus_f_measured` config. Value-/phase-equivalent to the non-windowed
+/// comparator (proven by `cmp_acc_plus_f_ge_p_measured_windowed_selftest`).
+pub(crate) fn dialog_gcd_apply_cmp_window_blocks() -> Option<usize> {
+    std::env::var("DIALOG_GCD_APPLY_CMP_WINDOW_BLOCKS")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|&w| w >= 2)
+}
+
 pub(crate) fn dialog_gcd_clean_truncated_underflow(
     b: &mut B,
     acc: &[QubitId],
@@ -1935,7 +1948,44 @@ pub(crate) fn dialog_gcd_cmod_sub_materialized_pseudomersenne_with_clean_scratch
         // `x(acc_ovf); mod_neg; cmp_lt_into_fast(acc<p-f); mod_neg` =
         // `acc_ovf ^= (acc>=p-f)` = `acc_ovf ^= (acc+f>=p)`.
         let c = U256::MAX.wrapping_sub(p).wrapping_add(U256::from(1u64));
-        cmp_acc_plus_f_ge_p_measured(b, acc, &f, c, acc_ovf);
+        if let Some(w) = dialog_gcd_apply_cmp_window_blocks() {
+            // SOUND-OPT-4: window the comparator's four internal (n+1)-wide carry
+            // arrays (Cuccaro +f/-f + SET-carry const +c/-c) into `w` B-blocks so
+            // only ~(n+1)/w carry lanes are live at the peak instant + (w-1) boundary
+            // carry-outs — dropping the `..._underflow_clean` peak transient onto the
+            // raw_difference/fold floor. VALUE- & PHASE-IDENTICAL to the non-windowed
+            // path (cmp_acc_plus_f_ge_p_measured_windowed_selftest: B in {2,3,4,5} x
+            // 8 seeds x 2 widths, incl. the (35,68) counterexample). w<=1 falls back
+            // to the exact non-windowed comparator gate-for-gate.
+            cmp_acc_plus_f_ge_p_measured_windowed(b, acc, &f, c, acc_ovf, w);
+        } else {
+            cmp_acc_plus_f_ge_p_measured(b, acc, &f, c, acc_ovf);
+        }
+    } else if std::env::var("DIALOG_GCD_UNDERFLOW_CLEAN_CMP").ok().as_deref()
+        == Some("acc_plus_f_measured_conditioned_borrowed_windowed")
+    {
+        // panel2 SOUND-OPT-7: the un-built stack of OPT-4 (windowed carry sweeps,
+        // peak 1926) + OPT-5 (phase-conditioned replay, half-rate Toffoli). The
+        // whole comparator block runs under push_condition(measured_predicate), so
+        // every CCX — INCLUDING the (w-1)*4 windowing boundary recomputes — is
+        // charged at ~half rate, while the four windowed sweeps collapse the peak
+        // onto the 1926 fold floor. Targets BOTH axes (peak AND Toffoli).
+        //
+        // The window-block count comes from DIALOG_GCD_APPLY_CMP_WINDOW_BLOCKS
+        // (B>=2 windows; default B=1 = non-windowed conditioned, no peak win). The
+        // recommended config is DIALOG_GCD_APPLY_CMP_WINDOW_BLOCKS=2 (the OPT-4
+        // optimum). VALUE-/PHASE-IDENTICAL to the non-conditioned/non-windowed
+        // reference — proven byte-identical (value + global phase) by
+        // cmp_acc_plus_f_ge_p_measured_conditioned_windowed_selftest over B in
+        // {2,3,4,5} x 8 seeds, incl. the (35,68) XOR counterexample.
+        //
+        // NB: there is NO carry borrowing here — windowing already collapses the
+        // peak below the descend-B 5-cell borrow tier, so the borrow is subsumed
+        // (the `_borrowed` in the knob name is retained for the ladder naming; the
+        // honest binder is the windowed fold floor, NOT a borrow).
+        let c = U256::MAX.wrapping_sub(p).wrapping_add(U256::from(1u64));
+        let w = dialog_gcd_apply_cmp_window_blocks().unwrap_or(1);
+        cmp_acc_plus_f_ge_p_measured_phase_conditioned_windowed(b, acc, &f, c, acc_ovf, w);
     } else if std::env::var("DIALOG_GCD_UNDERFLOW_CLEAN_CMP").ok().as_deref()
         == Some("acc_plus_f_measured_borrowed")
     {

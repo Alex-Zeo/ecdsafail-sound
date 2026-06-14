@@ -406,6 +406,474 @@ pub(crate) fn add_nbit_const_direct_uncontrolled_fast(b: &mut B, acc: &[QubitId]
     b.free(ctrl);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+//  Windowed (B-block) direct const add/sub — SOUND-OPT-4
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// The comparator `cmp_acc_plus_f_ge_p_measured` materializes `acc + f + c` in an
+// (n+1)-wide register. Its `+c` / `-c` const-adds (`{add,sub}_nbit_const_direct_
+// uncontrolled_fast`) each allocate ~n=256 carry lanes — pinning the apply peak
+// just like the Cuccaro `+f` does. The Cuccaro side already has a proven B-block
+// windowed primitive (`cuccaro_*_fast_windowed_low_to_ext`) that keeps only ~n/B
+// carry lanes live + (B-1) boundary carry-outs; below is the EXACT same structure
+// for the SET-carry direct const add/sub, so the comparator can window all four of
+// its internal carry arrays and drop its peak transient n -> ~n/B + (B-1).
+//
+// Block k computes `acc[lo..hi] += c[lo..hi] (+ carry_in)` into an EXTENDED block
+// `[acc[lo..hi] ++ cout_k]` so the block's own carry-out lands in the fresh `cout_k`
+// lane; that lane is the carry-IN of the next block. After all blocks the post-sum
+// `acc` holds `acc + c`, and each `cout_k` (the boundary carry g_k = carry-out of
+// the low-p_k bits of acc+c) is recomputed-and-cleared in reverse by a MEASURED
+// const-comparison `cout ^= ((acc[..p] post-sum) < c[..p])` — the SET-carry borrow
+// chain identity `g = (s < c)` for `s = (a + c) mod 2^p`. This is the const analog
+// of the Cuccaro windowing's `cmp_lt_into_fast_with_cin` boundary clean, and uses
+// the SAME measured (Hmr/cz_if) uncompute, so the comparator's per-carry-pair phase
+// cancellation is preserved.
+
+/// `[acc ++ implicit top via the caller's extended slice]` += (ctrl ? c : 0) + c_in,
+/// i.e. exactly [`cadd_nbit_const_direct_fast`] but the SET-carry recurrence is
+/// SEEDED with the carry-in qubit `c_in` at bit 0 (instead of carry_0 = 0). The
+/// carry chain becomes carry_0 = MAJ(acc_0, k_0, c_in) and sum_0 = acc_0 ^ k_0 ^ c_in.
+/// `c_in` is left UNCHANGED (it is a pure input to the MAJ/UMA, not a carry lane).
+/// Used as the per-block adder of the windowed const-add: the supplied extended
+/// slice's top bit captures the block carry-out.
+fn cadd_nbit_const_direct_fast_with_cin(
+    b: &mut B,
+    acc: &[QubitId],
+    c: U256,
+    ctrl: QubitId,
+    c_in: QubitId,
+) {
+    let n = acc.len();
+    if n == 0 {
+        return;
+    }
+
+    // Carry chain with carries[i] = carry OUT of bit i; the carry IN of bit i is
+    // carries[i-1] for i>0, and `c_in` for i==0. Need n-1 internal carry lanes
+    // (the carry out of the top bit is the block carry-out, which the caller reads
+    // off acc[n-1] = the extended top bit, so it is folded into the sum, not stored
+    // in a separate lane).
+    let carries = if n >= 2 { b.alloc_qubits(n - 1) } else { Vec::new() };
+
+    // Forward carry sweep. carry_{i} = majority(acc_i, k_i, carry_in_i).
+    for i in 0..n - 1 {
+        let target = carries[i];
+        let carry_in = if i == 0 { c_in } else { carries[i - 1] };
+        if bit(c, i) {
+            emit_fold_majority(b, acc[i], ctrl, carry_in, target, false);
+        } else {
+            b.ccx(acc[i], carry_in, target);
+        }
+    }
+
+    // Sum bits: acc_i ^= k_i ^ carry_in_i.  carry_in_0 = c_in; carry_in_i = carries[i-1].
+    for i in 0..n {
+        if bit(c, i) {
+            b.cx(ctrl, acc[i]);
+        }
+        if i == 0 {
+            b.cx(c_in, acc[i]);
+        } else {
+            b.cx(carries[i - 1], acc[i]);
+        }
+    }
+
+    // Measurement-uncompute carries in reverse.  Post-sum identity:
+    // carry_i = majority(!acc_i_final, k_i, carry_in_i).
+    for i in (0..n - 1).rev() {
+        let m = b.alloc_bit();
+        b.hmr(carries[i], m);
+        let carry_in = if i == 0 { c_in } else { carries[i - 1] };
+        if bit(c, i) {
+            b.x(acc[i]);
+            b.cz_if(acc[i], ctrl, m);
+            b.cz_if(acc[i], carry_in, m);
+            b.x(acc[i]);
+            b.cz_if(ctrl, carry_in, m);
+        } else {
+            b.x(acc[i]);
+            b.cz_if(acc[i], carry_in, m);
+            b.x(acc[i]);
+        }
+    }
+
+    if !carries.is_empty() {
+        b.free_vec(&carries);
+    }
+}
+
+/// `[acc ++ implicit] -= (ctrl ? c : 0) + b_in`, the borrow analog of
+/// [`cadd_nbit_const_direct_fast_with_cin`]. SET-borrow recurrence seeded with the
+/// borrow-in qubit `b_in` at bit 0. `b_in` is left unchanged.
+fn csub_nbit_const_direct_fast_with_cin(
+    b: &mut B,
+    acc: &[QubitId],
+    c: U256,
+    ctrl: QubitId,
+    b_in: QubitId,
+) {
+    let n = acc.len();
+    if n == 0 {
+        return;
+    }
+    let borrows = if n >= 2 { b.alloc_qubits(n - 1) } else { Vec::new() };
+
+    // Forward borrow sweep. borrow_i = majority(!acc_i, k_i, borrow_in_i).
+    for i in 0..n - 1 {
+        let target = borrows[i];
+        let borrow_in = if i == 0 { b_in } else { borrows[i - 1] };
+        if bit(c, i) {
+            b.x(acc[i]);
+            emit_fold_majority(b, acc[i], ctrl, borrow_in, target, false);
+            b.x(acc[i]);
+        } else {
+            b.x(acc[i]);
+            b.ccx(acc[i], borrow_in, target);
+            b.x(acc[i]);
+        }
+    }
+
+    // Difference bits: acc_i ^= k_i ^ borrow_in_i.
+    for i in 0..n {
+        if bit(c, i) {
+            b.cx(ctrl, acc[i]);
+        }
+        if i == 0 {
+            b.cx(b_in, acc[i]);
+        } else {
+            b.cx(borrows[i - 1], acc[i]);
+        }
+    }
+
+    // Measurement-uncompute borrows in reverse. Post-diff identity:
+    // borrow_i = majority(acc_i_final, k_i, borrow_in_i).
+    for i in (0..n - 1).rev() {
+        let m = b.alloc_bit();
+        b.hmr(borrows[i], m);
+        let borrow_in = if i == 0 { b_in } else { borrows[i - 1] };
+        if bit(c, i) {
+            b.cz_if(acc[i], ctrl, m);
+            b.cz_if(acc[i], borrow_in, m);
+            b.cz_if(ctrl, borrow_in, m);
+        } else {
+            b.cz_if(acc[i], borrow_in, m);
+        }
+    }
+
+    if !borrows.is_empty() {
+        b.free_vec(&borrows);
+    }
+}
+
+/// MEASURED const-comparison boundary clean: `cout ^= (acc[..]_post-sum < c)`
+/// computed via the SET-borrow chain of `acc - c` (seeded with borrow-in `b_in`),
+/// WITHOUT modifying `acc`. This recomputes the boundary carry-out of the windowed
+/// const-ADD: for the low-p sum `s = (a + c + carry_in_below) mod 2^p`, the carry
+/// out g satisfies `g = (s < c + carry_in_below)` — but the windowed driver passes
+/// the boundary's own carry-in via `b_in` so that this reproduces exactly the block
+/// carry-out. The chain runs forward to compute the top borrow into `cout`, then a
+/// MEASURED reverse uncompute restores the internal borrow lanes; `acc` is untouched
+/// because no difference bits are written (compare-only).
+fn cmp_const_borrow_into_fast_with_cin(
+    b: &mut B,
+    acc: &[QubitId],
+    c: U256,
+    ctrl: QubitId,
+    b_in: QubitId,
+    cout: QubitId,
+) {
+    let n = acc.len();
+    if n == 0 {
+        // (a < c) with a empty == c>0 ? but n==0 unused in our windowing.
+        return;
+    }
+    // Need n borrow lanes: borrow OUT of each of the n bits; the top borrow (out of
+    // bit n-1) is the comparison result. Seed bit 0 with b_in.
+    let borrows = b.alloc_qubits(n);
+
+    for i in 0..n {
+        let target = borrows[i];
+        let borrow_in = if i == 0 { b_in } else { borrows[i - 1] };
+        if bit(c, i) {
+            b.x(acc[i]);
+            emit_fold_majority(b, acc[i], ctrl, borrow_in, target, false);
+            b.x(acc[i]);
+        } else {
+            b.x(acc[i]);
+            b.ccx(acc[i], borrow_in, target);
+            b.x(acc[i]);
+        }
+    }
+
+    // Top borrow == (acc < c + b_in) == boundary carry-out of acc+c through bit n.
+    b.cx(borrows[n - 1], cout);
+
+    // MEASURED reverse uncompute of the borrow lanes (acc unchanged throughout).
+    // The forward wrote borrows[i] = MAJ(¬acc_i, k_i, borrow_in) (acc NEGATED in the
+    // x-wrapped majority), so the cz_if terms must negate acc to reproduce it.
+    for i in (0..n).rev() {
+        let m = b.alloc_bit();
+        b.hmr(borrows[i], m);
+        let borrow_in = if i == 0 { b_in } else { borrows[i - 1] };
+        if bit(c, i) {
+            b.x(acc[i]);
+            b.cz_if(acc[i], ctrl, m);
+            b.cz_if(acc[i], borrow_in, m);
+            b.x(acc[i]);
+            b.cz_if(ctrl, borrow_in, m);
+        } else {
+            b.x(acc[i]);
+            b.cz_if(acc[i], borrow_in, m);
+            b.x(acc[i]);
+        }
+    }
+
+    b.free_vec(&borrows);
+}
+
+/// Low-`w`-bit mask of a U256 (so a per-block constant does not spill a set bit
+/// into the appended boundary carry-out lane).
+fn mask_low_bits(c: U256, w: usize) -> U256 {
+    if w >= 256 {
+        return c;
+    }
+    let mask = (U256::from(1u64) << w).wrapping_sub(U256::from(1u64));
+    c & mask
+}
+
+/// Windowed (B-block) controlled direct const-add: `acc_ext += (ctrl ? c : 0)` with
+/// carry into the top bit, keeping only ~ext_n/B carry lanes live at any instant
+/// plus (B-1) boundary carry-outs. Value-/phase-equivalent to
+/// [`cadd_nbit_const_direct_fast`] on the same `acc_ext`. `acc_ext` includes the
+/// clean top bit that captures the overall carry-out (as in the comparator).
+pub(crate) fn cadd_nbit_const_direct_fast_windowed(
+    b: &mut B,
+    acc_ext: &[QubitId],
+    c: U256,
+    ctrl: QubitId,
+    blocks: usize,
+) {
+    let ext_n = acc_ext.len();
+    if ext_n == 0 {
+        return;
+    }
+    let blocks = blocks.max(1).min(ext_n);
+    if blocks == 1 {
+        cadd_nbit_const_direct_fast(b, acc_ext, c, ctrl);
+        return;
+    }
+
+    // Block boundaries identical to the cuccaro windowing: hi = ((blk+1)*ext_n)/blocks.
+    let mut lo = 0usize;
+    // boundary records: (cout lane, boundary position p = hi, carry-in lane used)
+    let mut couts: Vec<(QubitId, usize, Option<QubitId>)> = Vec::new();
+    let mut carry_in: Option<QubitId> = None;
+    for blk in 0..blocks {
+        let hi = ((blk + 1) * ext_n) / blocks;
+        if hi <= lo {
+            continue;
+        }
+        if blk == blocks - 1 || hi == ext_n {
+            // Final block: carry-out folds into acc_ext top bit; no fresh cout.
+            match carry_in {
+                Some(ci) => cadd_nbit_const_direct_fast_with_cin(
+                    b, &acc_ext[lo..hi], c >> lo, ctrl, ci,
+                ),
+                None => cadd_nbit_const_direct_fast(b, &acc_ext[lo..hi], c >> lo, ctrl),
+            }
+            break;
+        }
+        let cout = b.alloc_qubit();
+        let mut block: Vec<QubitId> = acc_ext[lo..hi].to_vec();
+        block.push(cout);
+        // Mask the per-block constant to the block's DATA width (hi-lo) so a set
+        // const bit never lands on the appended `cout` lane (which must receive
+        // only the carry-out). The (hi-lo)+1-wide block then computes
+        // data += c[lo..hi] + carry_in, carry-out into `cout`.
+        let c_block = mask_low_bits(c >> lo, hi - lo);
+        match carry_in {
+            Some(ci) => {
+                cadd_nbit_const_direct_fast_with_cin(b, &block, c_block, ctrl, ci)
+            }
+            None => cadd_nbit_const_direct_fast(b, &block, c_block, ctrl),
+        }
+        couts.push((cout, hi, carry_in));
+        carry_in = Some(cout);
+        lo = hi;
+    }
+
+    // Clean boundary carry-outs in reverse via the measured const-comparison on the
+    // post-sum low-p register: g_k = (acc_ext[..p] < (c + carry_in_below))/borrow.
+    for &(cout, p, ci) in couts.iter().rev() {
+        match ci {
+            Some(bi) => cmp_const_borrow_into_fast_with_cin(
+                b, &acc_ext[..p], c, ctrl, bi, cout,
+            ),
+            None => {
+                // No carry-in below: synthesize a clean |0> borrow-in lane.
+                let zin = b.alloc_qubit();
+                cmp_const_borrow_into_fast_with_cin(b, &acc_ext[..p], c, ctrl, zin, cout);
+                b.free(zin);
+            }
+        }
+        b.free(cout);
+    }
+}
+
+/// Windowed controlled direct const-sub: `acc_ext -= (ctrl ? c : 0)`, borrow into
+/// top bit. Mirror of [`cadd_nbit_const_direct_fast_windowed`].
+pub(crate) fn csub_nbit_const_direct_fast_windowed(
+    b: &mut B,
+    acc_ext: &[QubitId],
+    c: U256,
+    ctrl: QubitId,
+    blocks: usize,
+) {
+    let ext_n = acc_ext.len();
+    if ext_n == 0 {
+        return;
+    }
+    let blocks = blocks.max(1).min(ext_n);
+    if blocks == 1 {
+        csub_nbit_const_direct_fast(b, acc_ext, c, ctrl);
+        return;
+    }
+
+    let mut lo = 0usize;
+    let mut bouts: Vec<(QubitId, usize, Option<QubitId>)> = Vec::new();
+    let mut borrow_in: Option<QubitId> = None;
+    for blk in 0..blocks {
+        let hi = ((blk + 1) * ext_n) / blocks;
+        if hi <= lo {
+            continue;
+        }
+        if blk == blocks - 1 || hi == ext_n {
+            match borrow_in {
+                Some(bi) => csub_nbit_const_direct_fast_with_cin(
+                    b, &acc_ext[lo..hi], c >> lo, ctrl, bi,
+                ),
+                None => csub_nbit_const_direct_fast(b, &acc_ext[lo..hi], c >> lo, ctrl),
+            }
+            break;
+        }
+        let bout = b.alloc_qubit();
+        let mut block: Vec<QubitId> = acc_ext[lo..hi].to_vec();
+        block.push(bout);
+        // Mask per-block constant to data width (hi-lo): the appended `bout` lane
+        // must receive only the borrow-out, never a set const bit.
+        let c_block = mask_low_bits(c >> lo, hi - lo);
+        match borrow_in {
+            Some(bi) => {
+                csub_nbit_const_direct_fast_with_cin(b, &block, c_block, ctrl, bi)
+            }
+            None => csub_nbit_const_direct_fast(b, &block, c_block, ctrl),
+        }
+        bouts.push((bout, hi, borrow_in));
+        borrow_in = Some(bout);
+        lo = hi;
+    }
+
+    // Clean boundary borrow-outs in reverse. For SUB, the boundary borrow-out of the
+    // low-p bits of `acc - c` from the post-diff register `s = (a - c) mod 2^p` is
+    // g = (a[..p] < c[..p]+borrow_in_below); but post-diff a[..p] is NOT available
+    // (acc now holds the difference). The borrow-out of a-c equals the carry-out of
+    // (a + (2^p - c)) ... equivalently for the difference register s, the borrow
+    // satisfies g = (s_post-diff >= (2^p - c) complement) — we instead recompute it
+    // as the borrow chain of the ADD that inverts: g_sub = NOT(g_add of s + c). The
+    // simplest exact recomputation: the borrow-out of a-c equals (a < c+bin), and
+    // since s = a - c - bin (mod 2^p) ⇒ a = s + c + bin (mod 2^p), the borrow is
+    // g = ((s + c + bin) wrapped) i.e. g = (s + c + bin >= 2^p) = ADD carry-out of
+    // the post-diff register. Use the const-ADD carry chain on `s` to reproduce it.
+    for &(bout, p, bi) in bouts.iter().rev() {
+        match bi {
+            Some(ci) => cmp_const_carry_into_fast_with_cin(
+                b, &acc_ext[..p], c, ctrl, ci, bout,
+            ),
+            None => {
+                let zin = b.alloc_qubit();
+                cmp_const_carry_into_fast_with_cin(b, &acc_ext[..p], c, ctrl, zin, bout);
+                b.free(zin);
+            }
+        }
+        b.free(bout);
+    }
+}
+
+/// MEASURED const carry-out comparison: `cout ^= (acc + c + c_in >= 2^len)` computed
+/// via the SET-carry chain of `acc + c` (seeded with carry-in `c_in`), WITHOUT
+/// modifying `acc`. Boundary clean for the windowed const-SUB (see its body for the
+/// `g_sub = ADD carry-out of the post-diff register` derivation).
+fn cmp_const_carry_into_fast_with_cin(
+    b: &mut B,
+    acc: &[QubitId],
+    c: U256,
+    ctrl: QubitId,
+    c_in: QubitId,
+    cout: QubitId,
+) {
+    let n = acc.len();
+    if n == 0 {
+        return;
+    }
+    let carries = b.alloc_qubits(n);
+    for i in 0..n {
+        let target = carries[i];
+        let carry_in = if i == 0 { c_in } else { carries[i - 1] };
+        if bit(c, i) {
+            emit_fold_majority(b, acc[i], ctrl, carry_in, target, false);
+        } else {
+            b.ccx(acc[i], carry_in, target);
+        }
+    }
+    b.cx(carries[n - 1], cout);
+    // MEASURED reverse uncompute. The forward wrote carries[i] = MAJ(acc_i, k_i,
+    // carry_in) with acc in its ORIGINAL (compare-only) state, so the cz_if terms
+    // reproduce that majority referencing acc_i DIRECTLY (no negation — unlike the
+    // const-ADD's uncompute, where the sum-bit write leaves acc post-sum).
+    for i in (0..n).rev() {
+        let m = b.alloc_bit();
+        b.hmr(carries[i], m);
+        let carry_in = if i == 0 { c_in } else { carries[i - 1] };
+        if bit(c, i) {
+            b.cz_if(acc[i], ctrl, m);
+            b.cz_if(acc[i], carry_in, m);
+            b.cz_if(ctrl, carry_in, m);
+        } else {
+            b.cz_if(acc[i], carry_in, m);
+        }
+    }
+    b.free_vec(&carries);
+}
+
+/// Uncontrolled windowed const-add: `acc_ext += c` (carry into top), B blocks.
+pub(crate) fn add_nbit_const_direct_uncontrolled_fast_windowed(
+    b: &mut B,
+    acc_ext: &[QubitId],
+    c: U256,
+    blocks: usize,
+) {
+    let ctrl = b.alloc_qubit();
+    b.x(ctrl);
+    cadd_nbit_const_direct_fast_windowed(b, acc_ext, c, ctrl, blocks);
+    b.x(ctrl);
+    b.free(ctrl);
+}
+
+/// Uncontrolled windowed const-sub: `acc_ext -= c` (borrow into top), B blocks.
+pub(crate) fn sub_nbit_const_direct_uncontrolled_fast_windowed(
+    b: &mut B,
+    acc_ext: &[QubitId],
+    c: U256,
+    blocks: usize,
+) {
+    let ctrl = b.alloc_qubit();
+    b.x(ctrl);
+    csub_nbit_const_direct_fast_windowed(b, acc_ext, c, ctrl, blocks);
+    b.x(ctrl);
+    b.free(ctrl);
+}
+
 pub(crate) fn sub_nbit_const_direct_uncontrolled_fast(b: &mut B, acc: &[QubitId], c: U256) {
     let ctrl = b.alloc_qubit();
     b.x(ctrl);

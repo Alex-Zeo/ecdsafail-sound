@@ -848,6 +848,215 @@ pub(crate) fn cmp_acc_plus_f_ge_p_measured_borrowed(
     }
 }
 
+/// SOUND-OPT-4: WINDOWED variant of [`cmp_acc_plus_f_ge_p_measured`]. Computes the
+/// SAME predicate `flag ^= (acc + f >= p)` with the SAME value and the SAME MEASURED
+/// (Hmr/Gidney) uncompute phase structure, but every one of its four internal
+/// (n+1)-wide carry arrays — the Cuccaro `+f`/`-f` AND the SET-carry const `+c`/`-c`
+/// — is split into `blocks` B-blocks, so only ~ (n+1)/B carry lanes are live at any
+/// instant plus (B-1) boundary carry-outs. This collapses the comparator's peak
+/// transient from ~n=256 down to ~(n+1)/B + (B-1) (B=2 → ~129), dropping the apply
+/// `..._underflow_clean` peak onto the raw_difference / fold floor.
+///
+/// VALUE-EXACTNESS: the windowing reconstructs the boundary carry-outs EXACTLY — the
+/// Cuccaro side reuses the proven `cuccaro_*_fast_windowed_low_to_ext`
+/// (`cmp_lt_into_fast_with_cin` boundary clean, the same primitive trusted by the
+/// apply raw_difference); the const side uses `{add,sub}_nbit_const_direct_
+/// uncontrolled_fast_windowed`, whose boundary carries are recomputed with the
+/// MEASURED const carry/borrow comparison from the post-sum register (the algebraic
+/// identity `g = (s < c + cin)` / `(s + c + cin >= 2^p)`, see const_arith.rs). The
+/// TOP block always carries to bit n, so `acc_ext[n]` is the exact bit-n answer (no
+/// truncation). `blocks <= 1` reduces to the non-windowed `cmp_acc_plus_f_ge_p_measured`
+/// gate-for-gate, so it is a strict generalization.
+///
+/// PHASE-CLEANLINESS: every boundary clean is a MEASURED (Hmr/cz_if) sweep, identical
+/// in structure to the comparator's own uncompute, so per-carry-pair phase cancellation
+/// is preserved. (NB: changing `blocks` changes the Hmr draw count/order — re-run the
+/// isolated selftest AND the K-seed grader at each B before accepting, per SOUND-OPT-3.)
+pub(crate) fn cmp_acc_plus_f_ge_p_measured_windowed(
+    b: &mut B,
+    acc: &[QubitId],
+    f: &[QubitId],
+    c: U256,
+    flag: QubitId,
+    blocks: usize,
+) {
+    let n = acc.len();
+    assert_eq!(n, f.len());
+    assert!(n > 0);
+
+    let blocks = blocks.max(1);
+    if blocks == 1 {
+        // Strict generalization: B=1 is the exact non-windowed comparator.
+        return cmp_acc_plus_f_ge_p_measured(b, acc, f, c, flag);
+    }
+
+    // Extend acc with a clean overflow bit: acc_ext holds the (n+1)-bit sum.
+    let acc_ovf = b.alloc_qubit();
+    let mut acc_ext = acc.to_vec();
+    acc_ext.push(acc_ovf);
+
+    // acc_ext += f   (windowed MEASURED Cuccaro-fast, proven primitive). The
+    // low-to-ext form adds the n-wide `f` into the (n+1)-wide acc_ext, capturing the
+    // carry-out into acc_ext[n]; the f_ovf bit the non-windowed path used is NOT
+    // needed (the windowed low_to_ext allocates its own per-block zero/cout).
+    let c_in_add = b.alloc_qubit();
+    cuccaro_add_fast_windowed_low_to_ext(b, f, &acc_ext, c_in_add, blocks);
+    b.free(c_in_add);
+
+    // acc_ext += c   (windowed MEASURED SET-carry direct const-add).
+    add_nbit_const_direct_uncontrolled_fast_windowed(b, &acc_ext, c, blocks);
+
+    // bit n of acc_ext == (acc + f + c >= 2^n) == (acc + f >= p).
+    b.cx(acc_ext[n], flag);
+
+    // Restore acc_ext to acc: exact MEASURED inverses, in reverse order.
+    sub_nbit_const_direct_uncontrolled_fast_windowed(b, &acc_ext, c, blocks);
+    let c_in_sub = b.alloc_qubit();
+    cuccaro_sub_fast_windowed_low_to_ext(b, f, &acc_ext, c_in_sub, blocks);
+    b.free(c_in_sub);
+
+    b.free(acc_ovf);
+}
+
+/// panel2 SOUND-OPT-7: WINDOWED + PHASE-CONDITIONED variant of
+/// [`cmp_acc_plus_f_ge_p_measured`]. This is the un-built stack of OPT-4 (window
+/// the four internal (n+1)-wide carry sweeps so the comparator peak collapses onto
+/// the raw_difference/fold 1926 floor) AND OPT-5 (run the whole comparator block
+/// under `push_condition(measured_predicate)` so every CCX inside — INCLUDING the
+/// (B-1)*4 boundary-reconstruction recomputes the windowing adds — executes on only
+/// the ~50% of shots where the predicate fired, halving the avg-EXECUTED Toffoli,
+/// the graded metric).
+///
+/// CONTRACT (the cleaning contract, identical to the non-conditioned reference's
+/// only sound use): `flag` MUST hold the predicate value `(acc + f >= p)` on entry.
+/// The reference `cmp_acc_plus_f_ge_p_measured` does `flag ^= (acc+f>=p)`, which
+/// cleans `flag` to |0> ONLY when `flag` already held the predicate (the apply
+/// underflow_clean usage: `flag = acc_ovf` = the raw-sub borrow, which equals the
+/// predicate on the secp support). This variant clears `flag` to |0> via the
+/// measurement, so it is value-equivalent to the reference EXACTLY on that cleaning
+/// contract — proven byte-identical (value + global phase) by the differential
+/// selftest `cmp_acc_plus_f_ge_p_measured_conditioned_windowed_selftest`.
+///
+/// MECHANISM (composes the two proven transforms):
+///   1. `b.hmr(flag, phase)` — measure `flag` (= predicate `pr` on entry) into the
+///      classical bit `phase`, clearing the qubit to |0>. The simulator injects
+///      global phase `pr & rng & cond` and sets `phase = rng & cond`.
+///   2. Under `push_condition(phase)`: materialize `acc + f + c` into `acc_ext`
+///      via the SAME four WINDOWED measured sweeps as
+///      [`cmp_acc_plus_f_ge_p_measured_windowed`] (windowing is value- and
+///      phase-IDENTICAL to the non-windowed materialization, OPT-4 selftest), then
+///      apply `Z(acc_ext[n])` — phase `acc_ext[n] & cond & phase = pr & rng & cond`,
+///      cancelling the Hmr-injected phase EXACTLY — and run the EXACT windowed
+///      measured inverses to restore `acc`, `f`, and `acc_ext`. Because the whole
+///      block (all four windowed sweeps, every boundary recompute, every Hmr/cz_if
+///      uncompute pair) runs under one `push_condition(phase)`, every CCX inside it
+///      is charged on the `rng & cond` shots only — half on average. The per-carry
+///      Hmr/cz_if pairs inside each sweep share that condition, so their phase
+///      cancellation is preserved per-shot (the OPT-5 phase-cleanliness argument
+///      applies unchanged to the windowed sweeps because each boundary clean is the
+///      SAME measured-uncompute structure).
+///
+/// PEAK: at B>=2 the four windowed sweeps drop the comparator peak transient from
+/// ~n down to ~(n+1)/B + (B-1), collapsing the `..._underflow_clean` peak onto the
+/// 1926 fold floor (OPT-4 result). The conditioning is peak-neutral (it adds one
+/// classical bit, no qubit). So this lever targets BOTH axes: 1926 peak (OPT-4) AND
+/// half-rate Toffoli on the windowing surcharge (OPT-5). NB: there is NO carry
+/// borrowing here — windowing already collapses the peak below the borrow tier, so
+/// the descend-B 5-cell borrow is subsumed and not used (the knob name retains
+/// `_borrowed_windowed` for the dispatch ladder, but the borrow is moot under
+/// windowing; the honest binder is the windowed fold floor).
+///
+/// PHASE-CLEANLINESS is the dominant risk (SOUND-OPT-5 §5): conditioning changes the
+/// Hmr/rng draw COUNT and ORDER, and windowing nests (B-1)*4 EXTRA measured boundary
+/// sweeps inside the conditioned block, materially changing the global Hmr draw
+/// count/order relative to BOTH parents. The isolated selftest proves global-phase
+/// identity vs the reference over independent seeds and over B in {2,3,4,5} BEFORE
+/// any grade; the K-seed grader (fresh OS-random seeds) is the ultimate check and
+/// must be shown NOT to worsen the baseline robustness.
+pub(crate) fn cmp_acc_plus_f_ge_p_measured_phase_conditioned_windowed(
+    b: &mut B,
+    acc: &[QubitId],
+    f: &[QubitId],
+    c: U256,
+    flag: QubitId,
+    blocks: usize,
+) {
+    let n = acc.len();
+    assert_eq!(n, f.len());
+    assert!(n > 0);
+
+    // Measure `flag` (= the predicate value on entry, per the cleaning contract)
+    // into a classical bit and clear it to |0>. The measurement injects the global
+    // phase `flag & rng & cond`; the conditioned `Z(acc_ext[n])` below replays
+    // exactly that phase (acc_ext[n] reconstructs the predicate), so the net global
+    // phase is zero — identical to the reference's `cx(acc_ext[n], flag)` which,
+    // with `flag = predicate`, nets value 0 / phase 0.
+    let phase = b.alloc_bit();
+    b.hmr(flag, phase);
+
+    // Everything below executes only on shots where the measured bit `phase` fired
+    // (~50%), so all its CCX — the windowed sweeps AND the boundary recomputes — are
+    // charged on half the shots on average.
+    b.push_condition(phase);
+
+    let blocks = blocks.max(1);
+
+    // Extend acc with a clean overflow bit: acc_ext holds the (n+1)-bit sum.
+    let acc_ovf = b.alloc_qubit();
+    let mut acc_ext = acc.to_vec();
+    acc_ext.push(acc_ovf);
+
+    if blocks == 1 {
+        // B=1 degenerates to the non-windowed conditioned materialization. Use the
+        // non-windowed primitives (they need an f_ovf bit since they are NOT the
+        // low_to_ext form). Kept as a strict generalization / fallback.
+        let f_ovf = b.alloc_qubit();
+        let mut f_ext = f.to_vec();
+        f_ext.push(f_ovf);
+
+        let c_in_add = b.alloc_qubit();
+        cuccaro_add_fast(b, &f_ext, &acc_ext, c_in_add);
+        b.free(c_in_add);
+
+        add_nbit_const_direct_uncontrolled_fast(b, &acc_ext, c);
+
+        // PHASE replay: Z on bit n == the predicate, cancels the Hmr-injected phase.
+        b.cz(acc_ext[n], acc_ext[n]);
+
+        sub_nbit_const_direct_uncontrolled_fast(b, &acc_ext, c);
+        let c_in_sub = b.alloc_qubit();
+        cuccaro_sub_fast(b, &f_ext, &acc_ext, c_in_sub);
+        b.free(c_in_sub);
+
+        b.free(f_ovf);
+    } else {
+        // acc_ext += f  (windowed MEASURED Cuccaro-fast, low_to_ext form — no f_ovf
+        // needed; the windowed primitive allocates its own per-block zero/cout).
+        let c_in_add = b.alloc_qubit();
+        cuccaro_add_fast_windowed_low_to_ext(b, f, &acc_ext, c_in_add, blocks);
+        b.free(c_in_add);
+
+        // acc_ext += c  (windowed MEASURED SET-carry direct const-add).
+        add_nbit_const_direct_uncontrolled_fast_windowed(b, &acc_ext, c, blocks);
+
+        // PHASE replay: Z on bit n == the predicate (acc+f+c)>>n == (acc+f>=p).
+        // Under push_condition(phase) this applies phase `pr & rng & cond`,
+        // cancelling the Hmr-injected phase exactly (replacing the reference's
+        // value-copy `cx(acc_ext[n], flag)`).
+        b.cz(acc_ext[n], acc_ext[n]);
+
+        // Restore acc_ext to acc: exact WINDOWED MEASURED inverses, reverse order.
+        sub_nbit_const_direct_uncontrolled_fast_windowed(b, &acc_ext, c, blocks);
+        let c_in_sub = b.alloc_qubit();
+        cuccaro_sub_fast_windowed_low_to_ext(b, f, &acc_ext, c_in_sub, blocks);
+        b.free(c_in_sub);
+    }
+
+    b.free(acc_ovf);
+
+    b.pop_condition();
+}
+
 pub(crate) fn cmp_lt_into(b: &mut B, u: &[QubitId], v: &[QubitId], flag: QubitId) {
     let n = u.len();
     assert_eq!(n, v.len());
